@@ -274,6 +274,10 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           syncWeaponFromEquipment(next);
         }
       }
+      // ADS toggle (keyboard fallback — RMB also works when pointer is free)
+      if (e.code === 'KeyV' || key === 'v') {
+        syncWeaponFromEquipment(undefined, !weaponRef.current.aimingDownSights);
+      }
       // Quick-swap optic between irons and currently carried ACOG/T2 when available
       if (e.code === 'KeyO' || key === 'o') {
         const current = playerEquipment.attachments.optic;
@@ -659,10 +663,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         <span>·</span>
         <span className="text-amber-300 font-bold">L-Click: Fire</span>
         <span>·</span>
-        <span className="text-sky-300">RMB: ADS</span>
+        <span className="text-sky-300">RMB/V: ADS</span>
         <span>·</span>
         <span className="text-yellow-200">L: Light</span>
         <span>·</span>
+        <span className="text-violet-300">O: Optic</span>
         <button
           onClick={onToggleGodMode}
           className={`px-2 py-0.5 rounded text-[11px] font-bold cursor-pointer transition-colors ${
