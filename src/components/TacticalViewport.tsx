@@ -622,26 +622,24 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
     >
-      {/* 3D WebGL Canvas Container — blur intensifies under suppression */}
+      {/* 3D WebGL Canvas Container */}
       <div
         ref={containerRef}
         className="w-full h-full absolute inset-0 cursor-crosshair"
-        style={{
-          filter: suppressionBlur > 0.05 ? `blur(${suppressionBlur.toFixed(2)}px)` : undefined,
-          transition: 'filter 80ms linear',
-        }}
       />
 
-      {/* Suppression stress vignette / heavy-fire cue */}
-      {(suppressionBlur > 0.1 || underHeavyFire) && (
+      {/* Suppression: backdrop blur + vignette (blurs the canvas underneath) */}
+      {suppressionBlur > 0.05 && (
         <div
-          className="absolute inset-0 pointer-events-none z-10 transition-opacity duration-100"
+          className="absolute inset-0 pointer-events-none z-[5] transition-[backdrop-filter,opacity] duration-75"
           style={{
-            opacity: Math.min(0.85, 0.15 + suppressionBlur * 0.12 + (underHeavyFire ? 0.2 : 0)),
+            backdropFilter: `blur(${suppressionBlur.toFixed(2)}px)`,
+            WebkitBackdropFilter: `blur(${suppressionBlur.toFixed(2)}px)`,
             background: underHeavyFire
-              ? 'radial-gradient(circle at center, transparent 35%, rgba(15, 23, 42, 0.55) 78%, rgba(2, 6, 23, 0.92) 100%)'
-              : 'radial-gradient(circle at center, transparent 48%, rgba(15, 23, 42, 0.35) 100%)',
+              ? 'radial-gradient(circle at center, rgba(15,23,42,0.05) 28%, rgba(15, 23, 42, 0.45) 72%, rgba(2, 6, 23, 0.82) 100%)'
+              : `radial-gradient(circle at center, transparent 42%, rgba(15, 23, 42, ${Math.min(0.5, 0.12 + suppressionBlur * 0.06)}) 100%)`,
           }}
+          aria-hidden
         />
       )}
 

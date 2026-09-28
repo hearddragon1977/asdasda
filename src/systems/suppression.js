@@ -36,10 +36,15 @@ const DECAY_RATE = 0.38;
 const DECAY_FLOOR_BOOST = 0.12;
 
 /** Effect thresholds (stress 0–1). */
-const BLUR_START = 0.22;
+const BLUR_START = 0.15;
 const MUFFLE_START = 0.18;
 const SWAY_START = 0.12;
 const HEAVY_FIRE_THRESHOLD = 0.55;
+
+/** Peak CSS / backdrop blur in pixels at full stress. */
+const BLUR_MAX_PX = 7.5;
+/** Aim sway world-scale multiplier helpers (consumers also scale). */
+const SWAY_AMP_MAX = 0.14;
 
 /**
  * @typedef {{ x: number, y?: number, z: number }} Vec3
@@ -227,7 +232,7 @@ export class SuppressionSystem {
     const swayT = s <= SWAY_START ? 0 : (s - SWAY_START) / (1 - SWAY_START);
 
     // Organic two-frequency sway — stronger under heavy fire
-    const amp = swayT * swayT * 0.085;
+    const amp = swayT * swayT * SWAY_AMP_MAX;
     const swayOffsetX =
       Math.sin(this._swayPhase * 1.37) * amp * 1.4 +
       Math.sin(this._swayPhase * 3.1) * amp * 0.55;
@@ -244,7 +249,8 @@ export class SuppressionSystem {
 
     return {
       stress: s,
-      blurPx: blurT * blurT * 4.5,
+      // Ease-in curve keeps light stress subtle, then ramps hard under fire
+      blurPx: blurT * blurT * BLUR_MAX_PX,
       muffle: Math.min(1, muffleT * 1.05),
       swayRadians: amp,
       swayOffsetX,
@@ -275,4 +281,11 @@ export const SUPPRESSION_CONSTANTS = {
   IMPACT_NEAR_RADIUS,
   HIT_RADIUS,
   HEAVY_FIRE_THRESHOLD,
+  BLUR_MAX_PX,
 };
+
+// Dev / QA hook for verifying sensory feedback without waiting on combat RNG
+if (typeof window !== 'undefined') {
+  // eslint-disable-next-line no-underscore-dangle
+  window.__suppressionSystem = suppressionSystem;
+}
