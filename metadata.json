@@ -1,0 +1,6 @@
+{
+  "name": "Tactical Trauma & Combat Simulator",
+  "description": "Hyper-realistic PvE tactical bodycam combat and anatomical trauma simulator featuring zero-HUD sensory immersion, GOAP guerrilla AI, and tactical field medicine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

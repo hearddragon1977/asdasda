@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all (Master Gate)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Reusable Global Security Helpers
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Validation Blueprint for Operator Profile
+    function isValidOperator(data) {
+      return data.userId == request.auth.uid
+        && data.name is string && data.name.size() > 0 && data.name.size() <= 100
+        && data.callsign is string && data.callsign.size() <= 60
+        && data.rank is string && data.rank.size() <= 60
+        && data.unit is string && data.unit.size() <= 150
+        && data.bloodType is string && data.bloodType.size() <= 10
+        && data.status in ['active', 'dia', 'medically_discharged']
+        && data.deployments is int && data.deployments >= 0
+        && data.hostilesEliminated is int && data.hostilesEliminated >= 0
+        && (!('injuriesSustained' in data) || (data.injuriesSustained is list && data.injuriesSustained.size() <= 20))
+        && (!('dischargeReason' in data) || (data.dischargeReason is string && data.dischargeReason.size() <= 500))
+        && (!('purpleHeartAwarded' in data) || data.purpleHeartAwarded is bool)
+        && data.createdAt is string && data.createdAt.size() <= 40
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 40));
+    }
+
+    // Validation Blueprint for Casualty Report
+    function isValidCasualtyReport(data) {
+      return data.userId == request.auth.uid
+        && data.operatorName is string && data.operatorName.size() <= 100
+        && data.callsign is string && data.callsign.size() <= 60
+        && data.outcome in ['extracted_active', 'extracted_discharged', 'dia']
+        && data.finalBloodVolume is int && data.finalBloodVolume >= 0 && data.finalBloodVolume <= 5000
+        && data.woundsCount is int && data.woundsCount >= 0
+        && (!('woundsSummary' in data) || (data.woundsSummary is list && data.woundsSummary.size() <= 20))
+        && data.boardFindings is string && data.boardFindings.size() <= 1000
+        && data.createdAt is string && data.createdAt.size() <= 40;
+    }
+
+    // OPERATORS COLLECTION
+    match /operators/{operatorId} {
+      allow get: if isSignedIn() && isValidId(operatorId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(operatorId) && isValidOperator(incoming());
+      allow update: if isSignedIn()
+        && isValidId(operatorId)
+        && isValidOperator(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isSignedIn() && isValidId(operatorId) && existing().userId == request.auth.uid;
+    }
+
+    // CASUALTY REPORTS COLLECTION
+    match /casualty_reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(reportId) && isValidCasualtyReport(incoming());
+      allow delete: if isSignedIn() && isValidId(reportId) && existing().userId == request.auth.uid;
+    }
+  }
+}

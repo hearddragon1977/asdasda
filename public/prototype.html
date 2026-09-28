@@ -1,0 +1,1180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tactical Trauma & Combat Simulator - 3D Top-Down Prototype</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      user-select: none;
+    }
+    body {
+      background-color: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+    #game-container {
+      position: absolute;
+      top: 48px;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: #0f172a;
+    }
+    canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100% !important;
+      height: 100% !important;
+      display: block;
+      cursor: crosshair;
+    }
+    #top-bar {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 48px;
+      background: rgba(15, 23, 42, 0.95);
+      border-bottom: 1px solid rgba(51, 65, 85, 0.7);
+      padding: 0 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      backdrop-filter: blur(8px);
+      z-index: 10;
+    }
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .btn {
+      background: #1e293b;
+      border: 1px solid #475569;
+      color: #f8fafc;
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 4px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .btn:hover {
+      background: #334155;
+    }
+    .btn-god {
+      background: #065f46;
+      border-color: #10b981;
+      color: #a7f3d0;
+    }
+    .btn-god.active {
+      background: #047857;
+      border-color: #34d399;
+      color: #ffffff;
+      box-shadow: 0 0 10px rgba(52, 211, 153, 0.5);
+    }
+    .btn-primary {
+      background: #0284c7;
+      border-color: #38bdf8;
+    }
+    .btn-primary:hover {
+      background: #0369a1;
+    }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: none;
+      justify-content: center;
+      align-items: center;
+      z-index: 50;
+      padding: 20px;
+    }
+    .modal-card {
+      background: #1e293b;
+      border: 1px solid #475569;
+      border-radius: 6px;
+      width: 100%;
+      max-width: 720px;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #334155;
+      padding-bottom: 10px;
+    }
+    .table-row {
+      display: grid;
+      grid-template-columns: 2fr 1fr 1fr 1.5fr;
+      padding: 8px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid #334155;
+    }
+    .badge-alive {
+      color: #34d399;
+      font-weight: 700;
+    }
+    .badge-kia {
+      color: #f87171;
+      font-weight: 700;
+      text-decoration: line-through;
+    }
+    #hud-ammo {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid #334155;
+      padding: 12px 16px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-family: monospace;
+      z-index: 15;
+      min-width: 190px;
+    }
+    #mini-radar-container {
+      position: absolute;
+      top: 60px;
+      right: 20px;
+      background: rgba(15, 23, 42, 0.9);
+      border: 1px solid #334155;
+      padding: 8px;
+      border-radius: 6px;
+      z-index: 15;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    #tactical-intercept {
+      position: absolute;
+      top: 60px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(69, 26, 3, 0.95);
+      border: 1px solid #f59e0b;
+      padding: 8px 18px;
+      border-radius: 4px;
+      font-size: 12px;
+      font-family: monospace;
+      color: #fef3c7;
+      display: none;
+      z-index: 25;
+      box-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
+    }
+  </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+  <!-- Header Bar -->
+  <div id="top-bar">
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <span style="font-weight: 800; color: #38bdf8; font-size: 13px;">TACTICAL TRAUMA SIMULATOR</span>
+      <span style="color: #64748b;">·</span>
+      <span style="color: #4ade80;">M4A1 vs SGT. TARIQ'S SQUAD · WAVE <span id="header-wave">1</span></span>
+    </div>
+
+    <div class="top-actions">
+      <button class="btn btn-god" id="god-btn" onclick="toggleGodMode()">God Mode: OFF [G]</button>
+      <button class="btn" onclick="openScoreboard()">Scoreboard [Tab]</button>
+      <button class="btn" onclick="openMapModal()">Map [M]</button>
+      <button class="btn" onclick="callCasevacTriage()">Medevac [9]</button>
+      <button class="btn btn-primary" onclick="togglePause()">Pause / Menu [ESC]</button>
+    </div>
+  </div>
+
+  <div id="game-container"></div>
+
+  <!-- Tactical Radio Intercept Banner (Telegraphs Enemy Commander Squad Orders!) -->
+  <div id="tactical-intercept">
+    <span style="color: #f59e0b; font-weight: 800;">[RADIO INTERCEPT // SGT. TARIQ]:</span>
+    <span id="intercept-text" style="font-style: italic; margin-left: 6px;">"Flank the American point man!"</span>
+  </div>
+
+  <!-- Mini Radar Widget -->
+  <div id="mini-radar-container" onclick="openMapModal()" title="Click to open Full Tactical Map [M]">
+    <div style="font-size: 9px; color: #38bdf8; font-weight: 700; width: 100%; display: flex; justify-content: space-between;">
+      <span>LIVE RADAR</span>
+      <span style="color: #64748b;">[M]</span>
+    </div>
+    <canvas id="mini-radar" width="100" height="100" style="position: static !important; width: 100px !important; height: 100px !important; border-radius: 4px; background: #0b1120; border: 1px solid #1e293b;"></canvas>
+    <div style="font-size: 8px; color: #94a3b8; display: flex; gap: 6px;">
+      <span style="color: #22c55e;">● You</span>
+      <span style="color: #38bdf8;">● Blue</span>
+      <span style="color: #ef4444;">● Red</span>
+    </div>
+  </div>
+
+  <!-- Ammo HUD -->
+  <div id="hud-ammo">
+    <div style="font-size: 10px; color: #94a3b8; border-bottom: 1px solid #334155; padding-bottom: 4px; margin-bottom: 6px; display: flex; justify-content: space-between;">
+      <span>M4A1 5.56mm</span>
+      <span style="color: #4ade80;">AUTO (550 RPM)</span>
+    </div>
+    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+      <div>
+        <span id="mag-rounds" style="font-size: 24px; font-weight: 800; color: #4ade80;">30</span>
+        <span style="color: #64748b; font-size: 14px;">/ 30</span>
+      </div>
+      <div style="text-align: right;">
+        <span style="font-size: 9px; color: #94a3b8; display: block;">RESERVE</span>
+        <span style="font-weight: 700; color: #e2e8f0;">120 RDS</span>
+      </div>
+    </div>
+    <div id="reload-bar-container" style="display: none; margin-top: 6px;">
+      <div style="font-size: 9px; color: #f59e0b; margin-bottom: 2px;">RELOADING M4A1 (1.8s)...</div>
+      <div style="height: 5px; background: #334155; border-radius: 3px; overflow: hidden;">
+        <div id="reload-bar" style="height: 100%; width: 0%; background: #f59e0b;"></div>
+      </div>
+    </div>
+    <button id="reload-btn" onclick="startReload()" class="btn" style="width: 100%; margin-top: 8px; padding: 4px;">Reload [R]</button>
+  </div>
+
+  <!-- Scoreboard Modal -->
+  <div class="modal-overlay" id="scoreboard-modal">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 style="color: #38bdf8;">LIVE SECTOR ENGAGEMENT SCOREBOARD // WAVE <span id="sc-wave">1</span></h3>
+        <button class="btn" onclick="closeModal('scoreboard-modal')">Close [Tab / ESC]</button>
+      </div>
+      <div style="font-size: 12px; color: #38bdf8; font-weight: 700;">
+        TEAM 1: TASK FORCE ALPHA (BLUEFOR) - TOTAL KILLS: <span id="bluefor-score">0</span>
+      </div>
+      <div style="background: #0f172a; border-radius: 4px; border: 1px solid #334155;" id="bluefor-table"></div>
+      <div style="font-size: 12px; color: #f87171; font-weight: 700; margin-top: 8px;">
+        TEAM 2: OPFOR HOSTILE NETWORK (RED) - TOTAL KILLS: <span id="opfor-score">0</span>
+      </div>
+      <div style="background: #0f172a; border-radius: 4px; border: 1px solid #334155;" id="opfor-table"></div>
+    </div>
+  </div>
+
+  <!-- Map Modal -->
+  <div class="modal-overlay" id="map-modal">
+    <div class="modal-card" style="max-width: 760px;">
+      <div class="modal-header">
+        <h3 style="color: #38bdf8;">LIVE SATELLITE TACTICAL GRID (SECTOR 44-B)</h3>
+        <button class="btn" onclick="closeModal('map-modal')">Close [M / ESC]</button>
+      </div>
+      <div style="aspect-ratio: 16/10; background: #020617; border-radius: 4px; overflow: hidden; position: relative;">
+        <canvas id="big-map-canvas" width="720" height="450" style="position: static !important; width: 100% !important; height: 100% !important;"></canvas>
+      </div>
+      <div style="font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between;">
+        <span>Real-Time Satellite Feed · 1 Grid Square = 10 Meters</span>
+        <span style="color: #34d399;">● Green: You · ● Blue: Squad · ● Red: Hostiles · Grey: Movable Cover Crates</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pause Menu Modal -->
+  <div class="modal-overlay" id="pause-modal">
+    <div class="modal-card" style="max-width: 400px; text-align: center;">
+      <h2 style="color: #38bdf8;">TACTICAL PAUSE</h2>
+      <p style="font-size: 12px; color: #94a3b8;">Simulation suspended. Select an action:</p>
+      <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+        <button class="btn btn-primary" onclick="togglePause()">Resume Engagement [ESC]</button>
+        <button class="btn" onclick="openScoreboard()">View Real Scoreboard [Tab]</button>
+        <button class="btn" onclick="openMapModal()">View Live Topo Map [M]</button>
+        <button class="btn" onclick="toggleGodMode()">Toggle God Mode [G]</button>
+        <button class="btn" onclick="restartMission()">Restart Sector</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- CASEVAC Triage Report Modal (ONLY takes Wounded or Dead!) -->
+  <div class="modal-overlay" id="casevac-modal">
+    <div class="modal-card" style="max-width: 580px;">
+      <div class="modal-header">
+        <h3 style="color: #f59e0b;">DUSTOFF-4 TRIAGE REPORT // CASUALTIES ONLY</h3>
+        <button class="btn" onclick="closeModal('casevac-modal')">Close [ESC]</button>
+      </div>
+      <div id="casevac-content" style="font-size: 12px; line-height: 1.6; color: #cbd5e1;"></div>
+      <button class="btn btn-primary" onclick="closeModal('casevac-modal')">Confirm Triage & Continue</button>
+    </div>
+  </div>
+
+  <script>
+    // --- 3D TOP-DOWN SCENE SETUP ---
+    const container = document.getElementById('game-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x0f172a);
+
+    const width = container.clientWidth || window.innerWidth;
+    const height = container.clientHeight || (window.innerHeight - 48);
+
+    const camera = new THREE.PerspectiveCamera(50, width / height, 0.1, 1000);
+    camera.position.set(0, 34, 26);
+    camera.lookAt(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1.6);
+    dirLight.position.set(30, 50, 30);
+    dirLight.castShadow = true;
+    scene.add(dirLight);
+
+    const hemiLight = new THREE.HemisphereLight(0xf8fafc, 0x334155, 0.95);
+    scene.add(hemiLight);
+
+    // Floor & Grid
+    const floorGeo = new THREE.PlaneGeometry(120, 120);
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.8 });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const grid = new THREE.GridHelper(120, 60, 0x94a3b8, 0x475569);
+    grid.position.y = 0.02;
+    scene.add(grid);
+
+    // --- DYNAMIC PHYSICAL OBSTACLES (CRATES & BERMS) ---
+    const obstacles = [];
+    const crateGeo = new THREE.BoxGeometry(2.4, 2, 2.4);
+    const crateMat = new THREE.MeshStandardMaterial({ color: 0x78716c, roughness: 0.6 });
+
+    [[-4, -16], [4, -16], [-12, 6], [12, 8], [-22, -6], [22, -6], [0, 10], [-8, -2]].forEach(([x, z], idx) => {
+      const c = new THREE.Mesh(crateGeo, crateMat);
+      c.position.set(x, 1, z);
+      c.castShadow = true;
+      c.receiveShadow = true;
+      scene.add(c);
+      obstacles.push({ id: `crate_${idx}`, mesh: c, type: 'crate', pos: { x, z }, vel: { x: 0, z: 0 }, half: 1.2, movable: true });
+    });
+
+    const wallGeo = new THREE.BoxGeometry(10, 1.8, 1.4);
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x57534e, roughness: 0.9 });
+    [[-16, -10, 0], [16, -10, 0], [-24, -24, Math.PI / 4], [24, -24, -Math.PI / 4], [0, -32, 0]].forEach(([x, z, r], idx) => {
+      const w = new THREE.Mesh(wallGeo, wallMat);
+      w.position.set(x, 0.9, z);
+      w.rotation.y = r;
+      w.castShadow = true;
+      w.receiveShadow = true;
+      scene.add(w);
+      obstacles.push({ id: `wall_${idx}`, mesh: w, type: 'wall', pos: { x, z }, vel: { x: 0, z: 0 }, radius: 4.8, movable: false });
+    });
+
+    // --- PLAYER (Bright Green Box) ---
+    const playerGroup = new THREE.Group();
+    playerGroup.position.set(0, 0.9, 0);
+
+    const playerGeo = new THREE.BoxGeometry(1.8, 1.8, 1.8);
+    const playerMat = new THREE.MeshStandardMaterial({ color: 0x22c55e, roughness: 0.2, emissive: 0x16a34a, emissiveIntensity: 0.5 });
+    const playerMesh = new THREE.Mesh(playerGeo, playerMat);
+    playerMesh.castShadow = true;
+    playerGroup.add(playerMesh);
+
+    const barrelGeo = new THREE.BoxGeometry(0.4, 0.4, 1.5);
+    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x022c22, emissive: 0x15803d, emissiveIntensity: 0.3 });
+    const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+    barrel.position.set(0, 0.3, 1.1);
+    playerGroup.add(barrel);
+
+    const ringGeo = new THREE.RingGeometry(1.6, 1.9, 32);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0xfacc15, side: THREE.DoubleSide });
+    const godRing = new THREE.Mesh(ringGeo, ringMat);
+    godRing.rotation.x = Math.PI / 2;
+    godRing.position.y = 0.05;
+    godRing.visible = false;
+    playerGroup.add(godRing);
+
+    scene.add(playerGroup);
+
+    // --- FRIENDLY AI BLUEFOR SQUAD ---
+    const friendlyMeshes = new Map();
+    const friendlySquad = [
+      { id: 'doc', name: 'HM1 Miller', callsign: 'Doc Miller', role: 'Corpsman', kills: 0, deaths: 0, status: 'ALIVE', hp: 100, offX: -3.5, offZ: 2.5, rotY: 0, cooldown: 1.8 },
+      { id: 'gunner', name: 'Sgt. Ruiz', callsign: 'Gunner-6', role: 'SAW Gunner', kills: 0, deaths: 0, status: 'ALIVE', hp: 100, offX: 4.5, offZ: 2.0, rotY: 0, cooldown: 1.2 },
+      { id: 'shadow', name: 'Cpl. Ortiz', callsign: 'Shadow-3', role: 'Marksman', kills: 0, deaths: 0, status: 'ALIVE', hp: 100, offX: -5.5, offZ: 4.0, rotY: 0, cooldown: 2.2 },
+      { id: 'dustoff', name: 'Capt. Hayes', callsign: 'Dustoff-Lead', role: 'JTAC', kills: 0, deaths: 0, status: 'ALIVE', hp: 100, offX: 3.0, offZ: 4.5, rotY: 0, cooldown: 2.0 },
+    ];
+
+    const fBoxGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
+    const fBoxMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.25, emissive: 0x0284c7, emissiveIntensity: 0.5 });
+    const fBarrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
+    const fBarrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
+
+    friendlySquad.forEach(f => {
+      const g = new THREE.Group();
+      g.position.set(f.offX, 0.8, f.offZ);
+      const b = new THREE.Mesh(fBoxGeo, fBoxMat);
+      b.castShadow = true;
+      g.add(b);
+      const br = new THREE.Mesh(fBarrelGeo, fBarrelMat);
+      br.position.set(0, 0.25, 0.9);
+      g.add(br);
+      scene.add(g);
+      friendlyMeshes.set(f.id, g);
+    });
+
+    // --- GAME STATE ---
+    let isPaused = false;
+    let godMode = false;
+    let bloodVolume = 5000;
+    let isAlive = true;
+
+    let currentMagRounds = 30;
+    let isReloading = false;
+    let playerKills = 0;
+    let playerDeaths = 0;
+    let currentWave = 1;
+
+    const keys = {};
+    let isMouseDown = false;
+    let lastShotTime = 0;
+    const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    const aimPoint = new THREE.Vector3(0, 0, -5);
+
+    const playerBullets = [];
+    const enemyBullets = [];
+    const friendlyBullets = [];
+
+    // --- HOSTILE ENEMIES (ONE SGT. COMMANDER + INDEPENDENT SQUADMATES) ---
+    const enemyMeshes = new Map();
+    let enemies = [];
+    const enemyGeo = new THREE.SphereGeometry(1.1, 24, 24);
+    const enemyMat = new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.2, emissive: 0xdc2626, emissiveIntensity: 0.6 });
+
+    function showTacticalIntercept(speaker, text) {
+      const banner = document.getElementById('tactical-intercept');
+      document.getElementById('intercept-text').textContent = `"${text}"`;
+      banner.style.display = 'block';
+      setTimeout(() => banner.style.display = 'none', 4500);
+    }
+
+    function spawnWave(waveNum) {
+      currentWave = waveNum;
+      document.getElementById('header-wave').textContent = waveNum;
+      document.getElementById('sc-wave').textContent = waveNum;
+
+      enemies.forEach(e => {
+        const m = enemyMeshes.get(e.id);
+        if (m) scene.remove(m);
+      });
+      enemyMeshes.clear();
+      enemies = [];
+
+      const roster = [
+        { id: `w${waveNum}_sgt`, name: 'Sgt. Tariq Al-Masri', callsign: 'General Tariq', role: 'Squad Commander', x: 0, z: -26, state: 'suppress', hp: 4, kills: 0, deaths: 0, isCommander: true, burst: 4 },
+        { id: `w${waveNum}_flank_w`, name: 'Faris Qasim', callsign: 'Viper-West', role: 'Flanker Alpha', x: -24, z: -18, state: 'flank_left', hp: 3, kills: 0, deaths: 0, isCommander: false, burst: 3 },
+        { id: `w${waveNum}_flank_e`, name: 'Bilal Haddad', callsign: 'Viper-East', role: 'RPK Gunner', x: 24, z: -18, state: 'flank_right', hp: 3, kills: 0, deaths: 0, isCommander: false, burst: 6 },
+        { id: `w${waveNum}_marksman`, name: 'Ziyad Omar', callsign: 'Falcon-High', role: 'SVD Sniper', x: -8, z: -34, state: 'take_cover', hp: 2, kills: 0, deaths: 0, isCommander: false, burst: 2 },
+      ];
+
+      roster.forEach(r => {
+        const group = new THREE.Group();
+        const mesh = new THREE.Mesh(enemyGeo, enemyMat);
+        mesh.castShadow = true;
+        group.add(mesh);
+
+        if (r.isCommander) {
+          const crownGeo = new THREE.TorusGeometry(1.1, 0.15, 8, 16);
+          const crownMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+          const crown = new THREE.Mesh(crownGeo, crownMat);
+          crown.rotation.x = Math.PI / 2;
+          crown.position.y = 1.3;
+          group.add(crown);
+        }
+
+        group.position.set(r.x, 1.1, r.z);
+        scene.add(group);
+        enemyMeshes.set(r.id, group);
+        enemies.push({ ...r, group, cooldown: 1.0 + Math.random(), burstLeft: 0 });
+      });
+
+      updateScoreboardUI();
+      setTimeout(() => {
+        showTacticalIntercept('Sgt. Tariq', 'All units, focus fire on the American point man! Crossfire on his position!');
+      }, 1000);
+    }
+    spawnWave(1);
+
+    // --- SHOOTING & RELOADING ---
+    window.startReload = function() {
+      if (isReloading || currentMagRounds === 30) return;
+      isReloading = true;
+      document.getElementById('reload-bar-container').style.display = 'block';
+      const startTime = performance.now();
+      const duration = 1800;
+
+      const timer = setInterval(() => {
+        const elapsed = performance.now() - startTime;
+        const pct = Math.min(100, (elapsed / duration) * 100);
+        document.getElementById('reload-bar').style.width = `${pct}%`;
+
+        if (elapsed >= duration) {
+          clearInterval(timer);
+          isReloading = false;
+          currentMagRounds = 30;
+          document.getElementById('mag-rounds').textContent = '30';
+          document.getElementById('mag-rounds').style.color = '#4ade80';
+          document.getElementById('reload-bar-container').style.display = 'none';
+        }
+      }, 30);
+    };
+
+    function shootM4Round() {
+      if (isReloading) return;
+      const now = performance.now();
+      // Balanced M4 rate: 110ms (~550 RPM) matches enemy bursts
+      if (now - lastShotTime < 110) return;
+      lastShotTime = now;
+
+      if (currentMagRounds > 0) {
+        currentMagRounds--;
+        document.getElementById('mag-rounds').textContent = currentMagRounds;
+        if (currentMagRounds <= 5) document.getElementById('mag-rounds').style.color = '#ef4444';
+        else if (currentMagRounds <= 12) document.getElementById('mag-rounds').style.color = '#fbbf24';
+
+        const origin = playerGroup.position.clone();
+        origin.y = 0.9;
+        let dir = new THREE.Vector3().subVectors(aimPoint, origin);
+        dir.y = 0;
+        if (dir.lengthSq() < 0.001) {
+          dir = new THREE.Vector3(Math.sin(playerGroup.rotation.y), 0, Math.cos(playerGroup.rotation.y));
+        }
+        dir.normalize();
+
+        const bGeo = new THREE.SphereGeometry(0.35, 12, 12);
+        const bMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
+        const bMesh = new THREE.Mesh(bGeo, bMat);
+        bMesh.position.copy(origin);
+        scene.add(bMesh);
+
+        playerBullets.push({ mesh: bMesh, dir, speed: 36, life: 2.5 });
+      } else {
+        startReload();
+      }
+    }
+
+    function shootEnemyBullet(fromPos, toPos, shooterId) {
+      const from = new THREE.Vector3(fromPos.x, 0.9, fromPos.z);
+      const to = new THREE.Vector3(toPos.x, 0.9, toPos.z);
+      const dir = new THREE.Vector3().subVectors(to, from);
+      dir.y = 0;
+      if (dir.lengthSq() < 0.001) return;
+      dir.normalize();
+
+      const bGeo = new THREE.SphereGeometry(0.4, 12, 12);
+      const bMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+      const bMesh = new THREE.Mesh(bGeo, bMat);
+      bMesh.position.copy(from);
+      scene.add(bMesh);
+
+      enemyBullets.push({ mesh: bMesh, dir, speed: 36, life: 2.8, shooterId });
+    }
+
+    function shootFriendlyBullet(fromPos, toPos, friendlyId) {
+      const from = new THREE.Vector3(fromPos.x, 0.9, fromPos.z);
+      const to = new THREE.Vector3(toPos.x, 0.9, toPos.z);
+      const dir = new THREE.Vector3().subVectors(to, from);
+      dir.y = 0;
+      if (dir.lengthSq() < 0.001) return;
+      dir.normalize();
+
+      const bGeo = new THREE.SphereGeometry(0.35, 12, 12);
+      const bMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+      const bMesh = new THREE.Mesh(bGeo, bMat);
+      bMesh.position.copy(from);
+      scene.add(bMesh);
+
+      friendlyBullets.push({ mesh: bMesh, dir, speed: 36, life: 2.8, friendlyId });
+    }
+
+    // --- CASEVAC CASUALTY TRIAGE (ONLY EVACUATES WOUNDED OR DEAD!) ---
+    window.callCasevacTriage = function() {
+      const evacuated = [];
+      const retained = [];
+
+      // Check Player
+      if (!isAlive || bloodVolume <= 0) {
+        evacuated.push({ name: 'Staff Sgt. Vance (YOU)', status: 'KIA', injury: 'Fatal hypovolemic cardiac cessation' });
+      } else if (bloodVolume < 4900) {
+        evacuated.push({ name: 'Staff Sgt. Vance (YOU)', status: 'WIA', injury: `${Math.round(bloodVolume)}mL blood remaining, active hemorrhage` });
+      } else {
+        retained.push({ name: 'Staff Sgt. Vance (YOU)', status: '100% HEALTHY', role: 'Point Man' });
+      }
+
+      // Check Friendly AI Squad
+      friendlySquad.forEach(f => {
+        if (f.status === 'KIA' || f.hp <= 0) {
+          evacuated.push({ name: `${f.name} ("${f.callsign}")`, status: 'KIA', injury: 'Killed in action by hostile fire' });
+        } else if (f.hp < 100 || f.status === 'WIA') {
+          evacuated.push({ name: `${f.name} ("${f.callsign}")`, status: 'WIA', injury: `Severe combat wounds (${f.hp}% integrity remaining)` });
+        } else {
+          retained.push({ name: `${f.name} ("${f.callsign}")`, status: '100% HEALTHY', role: f.role });
+        }
+      });
+
+      let html = `
+        <div style="background: rgba(185,28,28,0.2); border: 1px solid #ef4444; padding: 10px; border-radius: 4px; margin-bottom: 10px;">
+          <h4 style="color: #ef4444; margin-bottom: 6px;">EVACUATED CASUALTIES (WOUNDED / DEAD ONLY - ${evacuated.length} Loaded):</h4>
+      `;
+      if (evacuated.length === 0) {
+        html += `<p style="color: #94a3b8; font-size: 11px;">No wounded or deceased operators in sector. All fireteam members remain combat effective. Evacuation bird returning to base.</p>`;
+      } else {
+        evacuated.forEach(c => {
+          html += `
+            <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid rgba(239,68,68,0.3);">
+              <span><strong>${c.name}</strong> (${c.injury})</span>
+              <span style="color: ${c.status === 'KIA' ? '#ef4444' : '#f59e0b'}; font-weight: 700;">${c.status}</span>
+            </div>
+          `;
+        });
+      }
+      html += `</div>`;
+
+      html += `
+        <div style="background: rgba(16,185,129,0.2); border: 1px solid #10b981; padding: 10px; border-radius: 4px;">
+          <h4 style="color: #10b981; margin-bottom: 6px;">RETAINED PERIMETER SECURITY (HEALTHY OPERATORS - ${retained.length} Holding Line):</h4>
+      `;
+      retained.forEach(r => {
+        html += `
+          <div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid rgba(16,185,129,0.3);">
+            <span><strong>${r.name}</strong> - ${r.role}</span>
+            <span style="color: #10b981; font-weight: 700;">HOLDING GROUND</span>
+          </div>
+        `;
+      });
+      html += `</div>`;
+
+      document.getElementById('casevac-content').innerHTML = html;
+      openModal('casevac-modal');
+    };
+
+    // --- OBSTACLE PHYSICS & RESOLUTION ---
+    function resolveCollisions(pos, radius = 1.0) {
+      let rx = pos.x;
+      let rz = pos.z;
+
+      for (const obs of obstacles) {
+        if (obs.type === 'crate') {
+          const clampX = Math.max(obs.pos.x - obs.half, Math.min(rx, obs.pos.x + obs.half));
+          const clampZ = Math.max(obs.pos.z - obs.half, Math.min(rz, obs.pos.z + obs.half));
+          const dx = rx - clampX;
+          const dz = rz - clampZ;
+          const distSq = dx * dx + dz * dz;
+
+          if (distSq < radius * radius) {
+            const dist = Math.sqrt(distSq) || 0.001;
+            const overlap = radius - dist;
+            const nx = dx / dist;
+            const nz = dz / dist;
+            rx += nx * overlap;
+            rz += nz * overlap;
+
+            // Push crate momentum
+            obs.vel.x -= nx * 2.5;
+            obs.vel.z -= nz * 2.5;
+          }
+        } else if (obs.type === 'wall') {
+          const dx = rx - obs.pos.x;
+          const dz = rz - obs.pos.z;
+          const d = Math.hypot(dx, dz);
+          if (d < obs.radius - 2.5) {
+            const ov = (obs.radius - 2.5) - d;
+            rx += (dx / d) * ov;
+            rz += (dz / d) * ov;
+          }
+        }
+      }
+      return { x: rx, z: rz };
+    }
+
+    // --- INPUT LISTENERS ---
+    window.addEventListener('keydown', (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (e.key === 'g' || e.key === 'G') toggleGodMode();
+      if (e.key === 'r' || e.key === 'R') startReload();
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        toggleModal('scoreboard-modal');
+        updateScoreboardUI();
+      }
+      if (e.key === 'm' || e.key === 'M') toggleModal('map-modal');
+      if (e.key === '9') callCasevacTriage();
+      if (e.key === 'Escape') togglePause();
+    });
+
+    window.addEventListener('keyup', (e) => {
+      keys[e.key.toLowerCase()] = false;
+    });
+
+    function updateAim(clientX, clientY) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersection = new THREE.Vector3();
+      if (raycaster.ray.intersectPlane(groundPlane, intersection)) {
+        aimPoint.copy(intersection);
+        const lookDir = new THREE.Vector3().subVectors(aimPoint, playerGroup.position);
+        lookDir.y = 0;
+        if (lookDir.lengthSq() > 0.01) {
+          playerGroup.rotation.y = Math.atan2(lookDir.x, lookDir.z);
+        }
+      }
+    }
+
+    window.addEventListener('mousemove', (e) => updateAim(e.clientX, e.clientY));
+    renderer.domElement.addEventListener('mousedown', (e) => {
+      if (e.button === 0) {
+        isMouseDown = true;
+        updateAim(e.clientX, e.clientY);
+        shootM4Round();
+      }
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) isMouseDown = false;
+    });
+
+    // Scoreboard UI & Radar
+    window.openScoreboard = function() { updateScoreboardUI(); openModal('scoreboard-modal'); };
+    window.openMapModal = function() { openModal('map-modal'); };
+
+    function updateScoreboardUI() {
+      const fKills = friendlySquad.reduce((a, f) => a + f.kills, 0);
+      document.getElementById('bluefor-score').textContent = playerKills + fKills;
+
+      const eKills = enemies.reduce((a, e) => a + e.kills, 0);
+      document.getElementById('opfor-score').textContent = eKills;
+
+      let bHtml = `
+        <div class="table-row" style="font-weight: 700; color: #94a3b8; background: #1e293b;">
+          <span>OPERATOR</span><span>KILLS</span><span>DEATHS</span><span>STATUS</span>
+        </div>
+        <div class="table-row" style="color: #34d399; font-weight: 700; background: rgba(56,189,248,0.1);">
+          <span>Player (Staff Sgt. Vance - YOU)</span>
+          <span>${playerKills}</span>
+          <span>${playerDeaths}</span>
+          <span class="${isAlive ? 'badge-alive' : 'badge-kia'}">${isAlive ? 'ALIVE' : 'KIA'}</span>
+        </div>
+      `;
+
+      friendlySquad.forEach(f => {
+        bHtml += `
+          <div class="table-row">
+            <span>${f.name} ("${f.callsign}")</span>
+            <span>${f.kills}</span>
+            <span>${f.deaths}</span>
+            <span class="${f.status === 'ALIVE' ? 'badge-alive' : 'badge-kia'}">${f.status}</span>
+          </div>
+        `;
+      });
+      document.getElementById('bluefor-table').innerHTML = bHtml;
+
+      let oHtml = `
+        <div class="table-row" style="font-weight: 700; color: #94a3b8; background: #1e293b;">
+          <span>HOSTILE COMBATANT</span><span>KILLS</span><span>DEATHS</span><span>STATUS</span>
+        </div>
+      `;
+      enemies.forEach(e => {
+        const isUp = e.hp > 0;
+        oHtml += `
+          <div class="table-row">
+            <span>${e.name} ${e.isCommander ? '★ [COMMANDER]' : ''} ("${e.callsign}")</span>
+            <span>${e.kills}</span>
+            <span>${e.deaths}</span>
+            <span class="${isUp ? 'badge-alive' : 'badge-kia'}">${isUp ? 'ALIVE' : 'KIA'}</span>
+          </div>
+        `;
+      });
+      document.getElementById('opfor-table').innerHTML = oHtml;
+    }
+
+    function renderRadarCanvas(canvas, isBig = false) {
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const toRx = (wx) => ((wx + 48) / 96) * w;
+      const toRy = (wz) => ((wz + 48) / 96) * h;
+
+      ctx.fillStyle = '#090d16';
+      ctx.fillRect(0, 0, w, h);
+
+      // Movable Crates
+      ctx.fillStyle = '#475569';
+      obstacles.forEach(obs => {
+        if (obs.type === 'crate') {
+          ctx.fillRect(toRx(obs.pos.x - 1.2), toRy(obs.pos.z - 1.2), (2.4 / 96) * w, (2.4 / 96) * h);
+        }
+      });
+
+      // Enemies (RED)
+      enemies.forEach(e => {
+        if (e.hp <= 0) return;
+        ctx.fillStyle = e.isCommander ? '#f59e0b' : '#ef4444';
+        ctx.beginPath();
+        ctx.arc(toRx(e.group.position.x), toRy(e.group.position.z), isBig ? 6 : 3, 0, Math.PI * 2);
+        ctx.fill();
+        if (isBig) {
+          ctx.fillStyle = e.isCommander ? '#fde68a' : '#fca5a5';
+          ctx.font = '10px monospace';
+          ctx.fillText(e.callsign, toRx(e.group.position.x) + 8, toRy(e.group.position.z) + 3);
+        }
+      });
+
+      // Friendlies (BLUE)
+      friendlySquad.forEach(f => {
+        if (f.status === 'KIA') return;
+        const g = friendlyMeshes.get(f.id);
+        if (!g) return;
+        ctx.fillStyle = '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(toRx(g.position.x), toRy(g.position.z), isBig ? 6 : 3, 0, Math.PI * 2);
+        ctx.fill();
+      });
+
+      // Player (GREEN)
+      const px = toRx(playerGroup.position.x);
+      const py = toRy(playerGroup.position.z);
+      ctx.fillStyle = '#22c55e';
+      ctx.beginPath();
+      ctx.arc(px, py, isBig ? 7 : 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Modal Utils
+    window.openModal = function(id) { document.getElementById(id).style.display = 'flex'; isPaused = true; };
+    window.closeModal = function(id) { document.getElementById(id).style.display = 'none'; isPaused = false; };
+    window.toggleModal = function(id) {
+      const el = document.getElementById(id);
+      if (el.style.display === 'flex') closeModal(id);
+      else openModal(id);
+    };
+    window.togglePause = function() {
+      const el = document.getElementById('pause-modal');
+      if (isPaused) closeModal('pause-modal');
+      else openModal('pause-modal');
+    };
+    window.toggleGodMode = function() {
+      godMode = !godMode;
+      godRing.visible = godMode;
+      const btn = document.getElementById('god-btn');
+      btn.textContent = godMode ? 'God Mode: ON [G]' : 'God Mode: OFF [G]';
+      btn.className = godMode ? 'btn btn-god active' : 'btn btn-god';
+    };
+
+    window.restartMission = function() {
+      closeModal('pause-modal');
+      closeModal('casevac-modal');
+      bloodVolume = 5000;
+      isAlive = true;
+      currentMagRounds = 30;
+      isReloading = false;
+      document.getElementById('mag-rounds').textContent = '30';
+      document.getElementById('mag-rounds').style.color = '#4ade80';
+      playerGroup.position.set(0, 0.9, 0);
+
+      // Respawn and revive all friendly AI operators
+      friendlySquad.forEach(f => {
+        f.hp = 100;
+        f.status = 'ALIVE';
+        const g = friendlyMeshes.get(f.id);
+        if (g) {
+          g.visible = true;
+          g.position.set(f.offX, 0.8, f.offZ);
+        }
+      });
+
+      spawnWave(1);
+      updateScoreboardUI();
+    };
+
+    // --- GAME LOOP ---
+    let lastTime = performance.now();
+    let commanderTimer = 4.0;
+
+    function animate(currentTime) {
+      requestAnimationFrame(animate);
+      const dt = Math.min(0.1, (currentTime - lastTime) / 1000);
+      lastTime = currentTime;
+
+      if (!isPaused && isAlive) {
+        if (isMouseDown) shootM4Round();
+
+        // Update Obstacle Damping & Physics
+        for (const obs of obstacles) {
+          if (!obs.movable) continue;
+          obs.pos.x += obs.vel.x * dt;
+          obs.pos.z += obs.vel.z * dt;
+          obs.vel.x *= Math.pow(0.85, dt * 60);
+          obs.vel.z *= Math.pow(0.85, dt * 60);
+          obs.pos.x = Math.max(-42, Math.min(42, obs.pos.x));
+          obs.pos.z = Math.max(-42, Math.min(42, obs.pos.z));
+          obs.mesh.position.x = obs.pos.x;
+          obs.mesh.position.z = obs.pos.z;
+        }
+
+        // Player Move & Physics Obstacle Collision
+        let mx = 0; let mz = 0;
+        if (keys['w'] || keys['arrowup']) mz -= 1;
+        if (keys['s'] || keys['arrowdown']) mz += 1;
+        if (keys['a'] || keys['arrowleft']) mx -= 1;
+        if (keys['d'] || keys['arrowright']) mx += 1;
+
+        if (mx !== 0 || mz !== 0) {
+          const len = Math.hypot(mx, mz);
+          let nx = playerGroup.position.x + (mx / len) * 9.5 * dt;
+          let nz = playerGroup.position.z + (mz / len) * 9.5 * dt;
+
+          const resolved = resolveCollisions({ x: nx, z: nz }, 1.0);
+          playerGroup.position.x = Math.max(-42, Math.min(42, resolved.x));
+          playerGroup.position.z = Math.max(-42, Math.min(42, resolved.z));
+        }
+
+        // Camera follow: 1:1 rigid lock eliminates aim drift and snap-back while walking
+        camera.position.x = playerGroup.position.x;
+        camera.position.z = playerGroup.position.z + 24;
+        camera.position.y = 32;
+        camera.lookAt(playerGroup.position.x, 0, playerGroup.position.z);
+
+        // Commander Tactical Orders
+        const commander = enemies.find(e => e.isCommander && e.hp > 0);
+        if (commander) {
+          commanderTimer -= dt;
+          if (commanderTimer <= 0) {
+            commanderTimer = 5.0 + Math.random() * 3.0;
+            const orders = [
+              'Viper-West, push left! Gunner, suppress the American point man!',
+              'Focus fire on the point man! Lay down heavy bursts!',
+              'Sniper, take high ground and target their leader!',
+            ];
+            showTacticalIntercept('Sgt. Tariq', orders[Math.floor(Math.random() * orders.length)]);
+          }
+        }
+
+        // Friendly AI Follow & Target Acquisition
+        friendlySquad.forEach(f => {
+          if (f.status === 'KIA') return;
+          const g = friendlyMeshes.get(f.id);
+          if (!g) return;
+
+          const desX = playerGroup.position.x + f.offX;
+          const desZ = playerGroup.position.z + f.offZ;
+          const ddx = desX - g.position.x;
+          const ddz = desZ - g.position.z;
+          const distF = Math.hypot(ddx, ddz);
+          if (distF > 0.5) {
+            g.position.x += (ddx / distF) * 8.5 * dt;
+            g.position.z += (ddz / distF) * 8.5 * dt;
+          }
+
+          let nearestE = null;
+          let minEd = Infinity;
+          enemies.forEach(e => {
+            if (e.hp <= 0) return;
+            const ed = g.position.distanceTo(e.group.position);
+            if (ed < minEd) { minEd = ed; nearestE = e; }
+          });
+
+          if (nearestE) {
+            const lookE = new THREE.Vector3().subVectors(nearestE.group.position, g.position);
+            g.rotation.y = Math.atan2(lookE.x, lookE.z);
+
+            f.cooldown -= dt;
+            if (f.cooldown <= 0 && minEd < 40) {
+              f.cooldown = 1.6 + Math.random() * 1.2;
+              shootFriendlyBullet(g.position, nearestE.group.position, f.id);
+            }
+          }
+        });
+
+        // Player Bullets
+        for (let i = playerBullets.length - 1; i >= 0; i--) {
+          const b = playerBullets[i];
+          b.mesh.position.addScaledVector(b.dir, b.speed * dt);
+          b.life -= dt;
+
+          let hitCover = false;
+          for (const obs of obstacles) {
+            if (obs.type === 'crate') {
+              if (Math.abs(b.mesh.position.x - obs.pos.x) < obs.half && Math.abs(b.mesh.position.z - obs.pos.z) < obs.half) {
+                hitCover = true;
+                obs.vel.x += b.dir.x * 2.5;
+                obs.vel.z += b.dir.z * 2.5;
+                break;
+              }
+            }
+          }
+
+          if (hitCover) {
+            scene.remove(b.mesh);
+            playerBullets.splice(i, 1);
+            continue;
+          }
+
+          for (const e of enemies) {
+            if (e.hp > 0 && b.mesh.position.distanceTo(e.group.position) < 1.4) {
+              e.hp--;
+              scene.remove(b.mesh);
+              playerBullets.splice(i, 1);
+              if (e.hp <= 0) {
+                scene.remove(e.group);
+                e.deaths++;
+                playerKills++;
+                if (e.isCommander) showTacticalIntercept('Viper-East', 'General Tariq is down! The commander has fallen!');
+                updateScoreboardUI();
+                checkWaveClear();
+              }
+              break;
+            }
+          }
+
+          if (b && b.life <= 0) {
+            scene.remove(b.mesh);
+            playerBullets.splice(i, 1);
+          }
+        }
+
+        // Enemies AI Burst Shooting (Fast, lethal bursts!)
+        for (const e of enemies) {
+          if (e.hp <= 0) continue;
+          const distToP = e.group.position.distanceTo(playerGroup.position);
+
+          const lookDir = new THREE.Vector3().subVectors(playerGroup.position, e.group.position);
+          e.group.rotation.y = Math.atan2(lookDir.x, lookDir.z);
+
+          // Automatic rapid burst logic
+          if (e.burstLeft > 0) {
+            e.cooldown -= dt;
+            if (e.cooldown <= 0) {
+              e.cooldown = 0.1; // Fast 100ms burst interval
+              e.burstLeft--;
+              shootEnemyBullet(e.group.position, playerGroup.position, e.id);
+            }
+          } else {
+            e.cooldown -= dt;
+            if (e.cooldown <= 0) {
+              e.burstLeft = e.burst || 3;
+              e.cooldown = 1.8 + Math.random();
+            }
+          }
+        }
+
+        // Enemy Bullets
+        for (let i = enemyBullets.length - 1; i >= 0; i--) {
+          const b = enemyBullets[i];
+          b.mesh.position.addScaledVector(b.dir, b.speed * dt);
+          b.life -= dt;
+
+          let hitCover = false;
+          for (const obs of obstacles) {
+            if (obs.type === 'crate') {
+              if (Math.abs(b.mesh.position.x - obs.pos.x) < obs.half && Math.abs(b.mesh.position.z - obs.pos.z) < obs.half) {
+                hitCover = true;
+                obs.vel.x += b.dir.x * 2.5;
+                obs.vel.z += b.dir.z * 2.5;
+                break;
+              }
+            }
+          }
+
+          if (hitCover) {
+            scene.remove(b.mesh);
+            enemyBullets.splice(i, 1);
+            continue;
+          }
+
+          if (b.mesh.position.distanceTo(playerGroup.position) < 1.3) {
+            scene.remove(b.mesh);
+            enemyBullets.splice(i, 1);
+            if (!godMode) {
+              bloodVolume -= 500;
+              if (bloodVolume <= 0) {
+                playerDeaths++;
+                const e = enemies.find(en => en.id === b.shooterId);
+                if (e) e.kills++;
+                updateScoreboardUI();
+                callCasevacTriage();
+              }
+            }
+            continue;
+          }
+
+          for (const f of friendlySquad) {
+            if (f.status === 'KIA') continue;
+            const g = friendlyMeshes.get(f.id);
+            if (g && b.mesh.position.distanceTo(g.position) < 1.3) {
+              f.hp -= 35;
+              scene.remove(b.mesh);
+              enemyBullets.splice(i, 1);
+              if (f.hp <= 0) {
+                f.status = 'KIA';
+                f.deaths++;
+                g.visible = false;
+                const e = enemies.find(en => en.id === b.shooterId);
+                if (e) e.kills++;
+                updateScoreboardUI();
+              }
+              break;
+            }
+          }
+
+          if (b.life <= 0) {
+            scene.remove(b.mesh);
+            enemyBullets.splice(i, 1);
+          }
+        }
+
+        renderRadarCanvas(document.getElementById('mini-radar'), false);
+        if (document.getElementById('map-modal').style.display === 'flex') {
+          renderRadarCanvas(document.getElementById('big-map-canvas'), true);
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+
+    function checkWaveClear() {
+      const alive = enemies.filter(e => e.hp > 0);
+      if (alive.length === 0) {
+        setTimeout(() => spawnWave(currentWave + 1), 3500);
+      }
+    }
+
+    window.addEventListener('resize', () => {
+      const w = container.clientWidth || window.innerWidth;
+      const h = container.clientHeight || (window.innerHeight - 48);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+    });
+
+    animate(performance.now());
+  </script>
+</body>
+</html>

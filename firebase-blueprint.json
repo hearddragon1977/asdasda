@@ -1,0 +1,158 @@
+{
+  "entities": {
+    "OperatorProfile": {
+      "title": "OperatorProfile",
+      "description": "Tactical operator dossier and service history",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Owner user UID"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Full military operator name"
+        },
+        "callsign": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Tactical radio callsign"
+        },
+        "rank": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Military rank"
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 150,
+          "description": "Special operations military unit"
+        },
+        "bloodType": {
+          "type": "string",
+          "maxLength": 10,
+          "description": "ABO and Rh blood group"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "dia", "medically_discharged"],
+          "description": "Active operational status"
+        },
+        "deployments": {
+          "type": "integer",
+          "description": "Completed combat tour count"
+        },
+        "hostilesEliminated": {
+          "type": "integer",
+          "description": "Confirmed insurgent neutralizations"
+        },
+        "injuriesSustained": {
+          "type": "array",
+          "description": "List of recorded anatomical ballistic injuries"
+        },
+        "dischargeReason": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Medical board or casualty discharge description"
+        },
+        "purpleHeartAwarded": {
+          "type": "boolean",
+          "description": "Purple Heart medal recipient flag"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Initial enlistment timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Latest deployment timestamp"
+        }
+      },
+      "required": [
+        "userId",
+        "name",
+        "callsign",
+        "rank",
+        "unit",
+        "bloodType",
+        "status",
+        "deployments",
+        "hostilesEliminated",
+        "createdAt"
+      ]
+    },
+    "CasualtyReport": {
+      "title": "CasualtyReport",
+      "description": "After-action medical board disposition and trauma log",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Owner user UID"
+        },
+        "operatorName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Operator casualty name"
+        },
+        "callsign": {
+          "type": "string",
+          "maxLength": 60,
+          "description": "Casualty callsign"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": ["extracted_active", "extracted_discharged", "dia"],
+          "description": "Medical board final disposition"
+        },
+        "finalBloodVolume": {
+          "type": "integer",
+          "description": "Remaining blood volume in mL"
+        },
+        "woundsCount": {
+          "type": "integer",
+          "description": "Number of ballistic wounds sustained"
+        },
+        "woundsSummary": {
+          "type": "array",
+          "description": "List of wound names"
+        },
+        "boardFindings": {
+          "type": "string",
+          "maxLength": 1000,
+          "description": "Surgical and medical board narrative"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Report creation timestamp"
+        }
+      },
+      "required": [
+        "userId",
+        "operatorName",
+        "callsign",
+        "outcome",
+        "finalBloodVolume",
+        "woundsCount",
+        "boardFindings",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/operators/{operatorId}": {
+      "schema": "OperatorProfile",
+      "description": "Tactical operator dossiers managed by authenticated commander"
+    },
+    "/casualty_reports/{reportId}": {
+      "schema": "CasualtyReport",
+      "description": "After-action trauma reports and MEDEVAC dispositions"
+    }
+  }
+}
