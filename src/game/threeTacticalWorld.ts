@@ -6,6 +6,7 @@ import {
   ENEMY_MODEL_URL,
   FRIENDLY_HITBOX,
   FRIENDLY_MODEL_URL,
+  PLAYER_HITBOX,
   fitModelToHitbox,
 } from './characterModels.ts';
 
@@ -51,6 +52,7 @@ export class ThreeTacticalWorld {
   private gltfLoader = new GLTFLoader();
   private friendlyTemplate: THREE.Object3D | null = null;
   private enemyTemplate: THREE.Object3D | null = null;
+  private playerTemplate: THREE.Object3D | null = null;
   private characterLoadState: 'loading' | 'ready' | 'failed' = 'loading';
 
   // Physical Obstacles with 1:1 Visual Mesh & AABB Collision (ZERO INVISIBLE OBSTACLES)
@@ -314,7 +316,9 @@ export class ThreeTacticalWorld {
       .then(([friendly, enemy]) => {
         this.friendlyTemplate = fitModelToHitbox(friendly.scene, FRIENDLY_HITBOX);
         this.enemyTemplate = fitModelToHitbox(enemy.scene, ENEMY_HITBOX);
+        this.playerTemplate = fitModelToHitbox(friendly.scene, PLAYER_HITBOX);
         this.characterLoadState = 'ready';
+        this.attachPlayerModel();
       })
       .catch((error: unknown) => {
         this.characterLoadState = 'failed';
@@ -334,6 +338,22 @@ export class ThreeTacticalWorld {
       this.characterLoadState === 'ready' && template ? template.clone(true) : createFallback();
     character.name = 'character';
     group.add(character);
+  }
+
+  /** Swap the green box and aim barrel for the friendly operator model. */
+  private attachPlayerModel(): void {
+    if (!this.playerTemplate || this.playerGroup.getObjectByName('character')) return;
+
+    const character = this.playerTemplate.clone(true);
+    character.name = 'character';
+    this.playerGroup.add(character);
+
+    this.playerGroup.remove(this.playerMesh);
+    this.playerGroup.remove(this.barrelMesh);
+    this.playerMesh.geometry.dispose();
+    (this.playerMesh.material as THREE.Material).dispose();
+    this.barrelMesh.geometry.dispose();
+    (this.barrelMesh.material as THREE.Material).dispose();
   }
 
   // --- PHYSICS ENGINE: CRATE MOMENTUM & DAMPING ---
