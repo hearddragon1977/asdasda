@@ -110,6 +110,49 @@ export interface WeaponDefinition {
   aliases?: string[];
 }
 
+export type WeaponEquipSlot = 'primary' | 'sidearm';
+export type GearSlot = 'helmet' | 'vest' | 'backpack';
+export type EquipmentSlot = WeaponEquipSlot | GearSlot;
+
+export interface GearDefinition {
+  id: string;
+  name: string;
+  shortName: string;
+  slot: GearSlot;
+  faction: WeaponFaction;
+  weightKg: number;
+  protection: number;
+  ammoBonusMags?: number;
+  mobilityPenalty?: number;
+  equippable: boolean;
+  era: string;
+  description: string;
+}
+
+/** Persisted ammo state for a weapon sitting in an inventory slot. */
+export interface WeaponLoadoutState {
+  weaponId: string;
+  currentMagRounds: number;
+  chambered: boolean;
+  reserveMags: number[];
+  reserveRounds: number;
+}
+
+/**
+ * Operator kit with dedicated equipment slots.
+ * Primary / sidearm hold firearms; helmet / vest / backpack hold gear IDs.
+ */
+export interface InventoryState {
+  primary: WeaponLoadoutState | null;
+  sidearm: WeaponLoadoutState | null;
+  helmetId: string | null;
+  vestId: string | null;
+  backpackId: string | null;
+  ownedWeaponIds: string[];
+  ownedGearIds: string[];
+  activeWeaponSlot: WeaponEquipSlot;
+}
+
 export interface WeaponState {
   weaponId: string; // key into WEAPONS_BY_ID
   currentMagRounds: number;

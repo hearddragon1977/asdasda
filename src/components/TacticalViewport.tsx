@@ -4,7 +4,12 @@ import { ThreeTacticalWorld } from '../game/threeTacticalWorld';
 import { anatomySim } from '../game/anatomySimulation';
 import { aiDirector } from '../game/aiGoap';
 import { tacticalAudio } from '../audio/tacticalAudio';
-import { EnemyCombatant, FriendlyCombatant, WeaponState } from '../types/game';
+import {
+  EnemyCombatant,
+  FriendlyCombatant,
+  WeaponEquipSlot,
+  WeaponState,
+} from '../types/game';
 import {
   DEFAULT_PLAYER_WEAPON,
   getShotIntervalMs,
@@ -13,13 +18,18 @@ import {
 
 interface TacticalViewportProps {
   weapon: WeaponState;
+  activeWeaponSlot: WeaponEquipSlot;
+  hasPrimary: boolean;
+  hasSidearm: boolean;
   godMode: boolean;
   isPaused: boolean;
   onToggleGodMode: () => void;
   onUpdateWeapon: (updater: (prev: WeaponState) => WeaponState) => void;
+  onSwitchWeaponSlot: (slot: WeaponEquipSlot) => void;
   onToggleMap: () => void;
   onCallCasevac: () => void;
   onOpenRoster: () => void;
+  onOpenInventory: () => void;
   onOpenScoreboard: () => void;
   onOpenPauseMenu: () => void;
   onVitalsChanged: () => void;
@@ -31,13 +41,18 @@ interface TacticalViewportProps {
 
 export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   weapon,
+  activeWeaponSlot,
+  hasPrimary,
+  hasSidearm,
   godMode,
   isPaused,
   onToggleGodMode,
   onUpdateWeapon,
+  onSwitchWeaponSlot,
   onToggleMap,
   onCallCasevac,
   onOpenRoster,
+  onOpenInventory,
   onOpenScoreboard,
   onOpenPauseMenu,
   onVitalsChanged,
@@ -53,12 +68,22 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   const keysPressed = useRef<{ [key: string]: boolean }>({});
   const isMouseDown = useRef<boolean>(false);
   const lastShotTime = useRef<number>(0);
+  const semiAutoLatched = useRef<boolean>(false);
 
   // Sync weapon ref to avoid stale closure in simulation loop and event listeners
   const weaponRef = useRef<WeaponState>(weapon);
   useEffect(() => {
     weaponRef.current = weapon;
   }, [weapon]);
+
+  const activeSlotRef = useRef(activeWeaponSlot);
+  const hasPrimaryRef = useRef(hasPrimary);
+  const hasSidearmRef = useRef(hasSidearm);
+  useEffect(() => {
+    activeSlotRef.current = activeWeaponSlot;
+    hasPrimaryRef.current = hasPrimary;
+    hasSidearmRef.current = hasSidearm;
+  }, [activeWeaponSlot, hasPrimary, hasSidearm]);
 
   const equippedWeapon =
     getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON;
@@ -172,9 +197,17 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const curWep = weaponRef.current;
     if (curWep.isReloading) return; // Strictly blocked during reload!
 
+    const slot = activeSlotRef.current;
+    const slotArmed =
+      (slot === 'primary' && hasPrimaryRef.current) ||
+      (slot === 'sidearm' && hasSidearmRef.current);
+    if (!slotArmed) {
+      tacticalAudio.playDryFire();
+      return;
+    }
+
     // Check actual magazine ammo
     if (curWep.currentMagRounds <= 0) {
-      // Empty magazine -> Dry fire click & trigger reload!
       tacticalAudio.playDryFire();
       triggerReload();
       return;
@@ -184,21 +217,26 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     if (!world) return;
 
     const def = getWeaponById(curWep.weaponId) ?? DEFAULT_PLAYER_WEAPON;
-    const interval = Math.max(75, getShotIntervalMs(def));
+    const isFullAuto =
+      def.fireModes.includes('auto') || def.fireModes.includes('burst');
+    if (!isFullAuto && semiAutoLatched.current) return;
+
+    const interval = isFullAuto
+      ? Math.max(75, getShotIntervalMs(def))
+      : 120;
     const now = performance.now();
     if (now - lastShotTime.current < interval) return;
     lastShotTime.current = now;
+    if (!isFullAuto) semiAutoLatched.current = true;
 
     tacticalAudio.init();
     tacticalAudio.playM4Fire();
 
-    // Decrement magazine count immediately!
     onUpdateWeapon((prev) => ({
       ...prev,
       currentMagRounds: Math.max(0, prev.currentMagRounds - 1),
     }));
 
-    // Shoot player bullet towards mouse aim
     world.shootPlayerBullet(world.aimPoint);
   };
 
@@ -236,6 +274,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       if (key === 'g') onToggleGodMode();
       if (e.code === 'KeyR' || key === 'r') triggerReload();
       if (e.code === 'KeyM' || key === 'm') onToggleMap();
+      if (e.code === 'KeyI' || key === 'i') onOpenInventory();
+      if (e.code === 'Digit1' || key === '1') onSwitchWeaponSlot('primary');
+      if (e.code === 'Digit2' || key === '2') onSwitchWeaponSlot('sidearm');
       if (e.code === 'Digit9') onCallCasevac();
       if (e.code === 'KeyP' || key === 'p') onOpenRoster();
     };
@@ -275,6 +316,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const handleMouseUp = (e: MouseEvent) => {
       if (e.button === 0) {
         isMouseDown.current = false;
+        semiAutoLatched.current = false;
       }
     };
 
@@ -592,7 +634,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       <div className="absolute top-4 left-4 z-20 flex items-center gap-3 bg-slate-950/85 backdrop-blur-md px-3.5 py-1.5 rounded border border-slate-800 text-xs font-mono text-slate-300">
         <span>WASD: Move</span>
         <span>·</span>
-        <span className="text-amber-300 font-bold">L-Click: Auto M4 Fire</span>
+        <span className="text-amber-300 font-bold">L-Click: Fire</span>
+        <span className="hidden sm:inline">·</span>
+        <span className="hidden sm:inline text-sky-300">[1]/[2] Swap · [I] Gear</span>
         <span>·</span>
         <button
           onClick={onToggleGodMode}
@@ -653,6 +697,36 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
       {/* Bottom Right Authentic Weapon HUD (Magazine & Ammo Counter) */}
       <div className="absolute bottom-4 right-4 z-20 bg-slate-950/90 backdrop-blur-md p-3.5 rounded border border-slate-800 font-mono text-xs flex flex-col gap-1.5 shadow-2xl min-w-[210px]">
+        <div className="flex gap-1 mb-0.5">
+          <button
+            type="button"
+            onClick={() => onSwitchWeaponSlot('primary')}
+            disabled={!hasPrimary}
+            className={`flex-1 py-0.5 text-[9px] font-bold border rounded-sm cursor-pointer ${
+              activeWeaponSlot === 'primary'
+                ? 'border-emerald-500 bg-emerald-950/50 text-emerald-300'
+                : hasPrimary
+                  ? 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500'
+                  : 'border-slate-800 bg-slate-950 text-slate-700 cursor-not-allowed'
+            }`}
+          >
+            [1] PRIMARY
+          </button>
+          <button
+            type="button"
+            onClick={() => onSwitchWeaponSlot('sidearm')}
+            disabled={!hasSidearm}
+            className={`flex-1 py-0.5 text-[9px] font-bold border rounded-sm cursor-pointer ${
+              activeWeaponSlot === 'sidearm'
+                ? 'border-emerald-500 bg-emerald-950/50 text-emerald-300'
+                : hasSidearm
+                  ? 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500'
+                  : 'border-slate-800 bg-slate-950 text-slate-700 cursor-not-allowed'
+            }`}
+          >
+            [2] SIDEARM
+          </button>
+        </div>
         <div className="flex justify-between items-center text-[10px] text-slate-400 uppercase border-b border-slate-800 pb-1">
           <span className="font-bold text-slate-200">
             {equippedWeapon.shortName.toUpperCase()} {equippedWeapon.caliber.split(' ')[0]}

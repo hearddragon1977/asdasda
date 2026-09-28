@@ -1227,6 +1227,19 @@ export const WEAPONS_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w]));
 /** Default player-equippable carbine for Bluefor operators. */
 export const DEFAULT_PLAYER_WEAPON = M4A1;
 
+/** Default sidearm for Bluefor operators. */
+export const DEFAULT_SIDEARM = M9;
+
+/**
+ * Inventory equip slot for a weapon definition.
+ * Pistols → sidearm; everything else → primary.
+ * @param {WeaponDefinition | { category: string }} weapon
+ * @returns {'primary' | 'sidearm'}
+ */
+export function getWeaponEquipSlot(weapon) {
+  return weapon.category === 'pistol' ? 'sidearm' : 'primary';
+}
+
 /**
  * @param {string} id
  * @returns {WeaponDefinition | undefined}
@@ -1257,6 +1270,14 @@ export function getWeaponsByCategory(category) {
  */
 export function getEquippableWeapons() {
   return WEAPONS.filter((w) => w.equippable);
+}
+
+/**
+ * @param {'primary' | 'sidearm'} slot
+ * @returns {WeaponDefinition[]}
+ */
+export function getWeaponsForSlot(slot) {
+  return WEAPONS.filter((w) => w.equippable && getWeaponEquipSlot(w) === slot);
 }
 
 export default WEAPONS;
