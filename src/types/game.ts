@@ -60,6 +60,42 @@ export interface MedicalKit {
   splints: number;
 }
 
+/** Body-worn tactical gear slots (src/data/gear.js + src/systems/equipment.js). */
+export type EquipmentSlot = 'vest' | 'helmet' | 'backpack';
+/** Weapon rail attachment slots. */
+export type AttachmentSlot = 'optic' | 'flashlight' | 'muzzle';
+export type GearReticle = 'iron' | 'red_dot' | 'holo' | 'lpvo' | 'acog' | 'scope';
+
+export interface WeaponAttachmentsState {
+  opticId: string | null;
+  flashlightId: string | null;
+  muzzleId: string | null;
+}
+
+export interface EquipmentSlotsState {
+  vest: string | null;
+  helmet: string | null;
+  backpack: string | null;
+}
+
+export interface AttachmentSlotsState {
+  optic: string | null;
+  flashlight: string | null;
+  muzzle: string | null;
+}
+
+/** Snapshot of a unit's worn gear + rail devices for React / AI sync. */
+export interface UnitLoadoutState {
+  unitId: string;
+  equipment: EquipmentSlotsState;
+  attachments: AttachmentSlotsState;
+  inventory: { id: string; qty?: number }[];
+  carriedWeightKg: number;
+  capacityKg: number;
+  encumbrancePenalty: number;
+  moveSpeedMultiplier: number;
+}
+
 export interface WeaponState {
   currentMagRounds: number; // max 30
   chambered: boolean;
@@ -72,6 +108,20 @@ export interface WeaponState {
   tacticalLaser: boolean;
   tacticalLight: boolean;
   dryFired: boolean;
+  /** Rail attachments from equipment system (optic / light / muzzle). */
+  attachments?: WeaponAttachmentsState;
+  /** ADS zoom multiplier sourced from equipped optic. */
+  adsZoom?: number;
+  /** Reticle behaviour key from equipped optic. */
+  reticle?: GearReticle | string;
+  /** Relative muzzle blast loudness (suppressor < 1). */
+  soundSignature?: number;
+  /** Relative muzzle flash scale (suppressor ≈ 0). */
+  muzzleFlashScale?: number;
+  /** AI / spatial-audio hearing radius multiplier. */
+  hearingRangeMul?: number;
+  /** True when a suppressor muzzle device is mounted. */
+  isSuppressed?: boolean;
 }
 
 export interface CasevacState {
@@ -156,6 +206,8 @@ export interface EnemyCombatant {
   isCommander?: boolean;
   burstCount?: number;
   burstRemaining?: number;
+  /** Optional equipment loadout id mirror (managed by equipmentManager). */
+  loadout?: UnitLoadoutState;
 }
 
 export interface FriendlyCombatant {
@@ -177,4 +229,6 @@ export interface FriendlyCombatant {
   lastBark: string;
   lastBarkTime: number;
   currentAmmo: number;
+  /** Optional equipment loadout id mirror (managed by equipmentManager). */
+  loadout?: UnitLoadoutState;
 }

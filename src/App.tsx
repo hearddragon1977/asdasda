@@ -14,12 +14,14 @@ import {
   WeaponState,
   CasevacState,
   OperatorRecord,
+  UnitLoadoutState,
 } from './types/game';
 
 import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
+import { equipmentManager, playerEquipment } from './systems/equipment.js';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
   CasualtyReportRecord,
@@ -61,19 +63,26 @@ function TacticalAppContent() {
     'OPFOR insurgents advancing through perimeter berms',
   ]);
 
-  // Weapon state (Authentic M4A1 30-round mag)
-  const [weapon, setWeapon] = useState<WeaponState>({
-    currentMagRounds: 30,
-    chambered: true,
-    reserveMags: [30, 30, 24, 18],
-    isReloading: false,
-    isInspectingMag: false,
-    magCheckInspectionText: null,
-    aimingDownSights: false,
-    tacticalLaser: true,
-    tacticalLight: false,
-    dryFired: false,
+  // Weapon state (Authentic M4A1 30-round mag) — attachments seeded from equipment kit
+  const [weapon, setWeapon] = useState<WeaponState>(() => {
+    const base: WeaponState = {
+      currentMagRounds: 30,
+      chambered: true,
+      reserveMags: [30, 30, 24, 18],
+      isReloading: false,
+      isInspectingMag: false,
+      magCheckInspectionText: null,
+      aimingDownSights: false,
+      tacticalLaser: true,
+      tacticalLight: false,
+      dryFired: false,
+    };
+    return playerEquipment.applyToWeaponState(base) as WeaponState;
   });
+
+  const [playerLoadout, setPlayerLoadout] = useState<UnitLoadoutState>(() =>
+    playerEquipment.snapshot()
+  );
 
   // CASEVAC 9-Line State
   const [casevac, setCasevac] = useState<CasevacState>({
@@ -245,14 +254,21 @@ function TacticalAppContent() {
     // Respawn Friendly AI squad with full health and full combat readiness
     aiDirector.spawnFriendlySquad({ x: 0, z: 0 });
     setFriendlies([...aiDirector.friendlies]);
-    // Replenish weapon ammunition
-    setWeapon((prev) => ({
-      ...prev,
-      isReloading: false,
-      currentMagRounds: 30,
-      reserveRounds: 120,
-      reserveMags: [30, 30, 30, 30],
-    }));
+    // Replenish weapon ammunition + re-seat default tactical kit
+    equipmentManager.resetPlayer();
+    setWeapon((prev) => {
+      const refreshed = playerEquipment.applyToWeaponState({
+        ...prev,
+        isReloading: false,
+        currentMagRounds: 30,
+        reserveRounds: 120,
+        reserveMags: [30, 30, 30, 30],
+        aimingDownSights: false,
+        tacticalLight: false,
+      }) as WeaponState;
+      return refreshed;
+    });
+    setPlayerLoadout(playerEquipment.snapshot());
     handleVitalsChanged();
   };
 
@@ -433,7 +449,7 @@ function TacticalAppContent() {
             Tactical Trauma Simulator
           </span>
           <span className="hidden sm:inline text-xs font-mono text-emerald-400">
-            · M4A1 (800 RPM) · WAVE {currentWave}
+            · M4A1 · {playerLoadout.equipment.vest ?? 'NO VEST'} · WAVE {currentWave}
           </span>
         </div>
 
@@ -525,6 +541,7 @@ function TacticalAppContent() {
           onFriendlyDown={handleFriendlyDown}
           onPlayerPositionChanged={setPlayerPos}
           onSquadStateChanged={handleSquadSync}
+          onLoadoutChanged={setPlayerLoadout}
         />
 
         {/* AI CASEVAC 9-Line Extraction Panel & After-Action Report (Reveals health & trauma only upon extraction or DIA!) */}
