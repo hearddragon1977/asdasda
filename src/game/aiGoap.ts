@@ -518,7 +518,8 @@ export class GuerrillaAiDirector {
       to: { x: number; y: number; z: number },
       isBluefor: boolean,
       shooterId: string
-    ) => void
+    ) => void,
+    hasLineOfSight?: (from: { x: number; z: number }, to: { x: number; z: number }) => boolean
   ): void {
     if (this.waveSpawnPending) {
       this.waveSpawnTimer -= dt;
@@ -553,9 +554,19 @@ export class GuerrillaAiDirector {
 
       enemy.rotationY = Math.atan2(dx, dz);
 
-      // Rapid burst shooting
+      // Rapid burst shooting — gated by compound LOS so walls/barriers matter
       enemy.shootCooldown = (enemy.shootCooldown ?? 1.0) - dt;
       if (enemy.shootCooldown <= 0 && dist < 42) {
+        const clearShot =
+          !hasLineOfSight ||
+          hasLineOfSight(
+            { x: enemy.position.x, z: enemy.position.z },
+            { x: targetPos.x, z: targetPos.z }
+          );
+        if (!clearShot) {
+          enemy.shootCooldown = 0.35;
+          // Keep advancing / flanking when blocked; don't burn ammo into walls
+        } else {
         const isRPK = enemy.role.includes('RPK');
         const isSVD = enemy.role.includes('SVD');
 
@@ -580,6 +591,7 @@ export class GuerrillaAiDirector {
         } else {
           enemy.shootCooldown = isRPK ? 1.4 : isSVD ? 2.2 : 1.6 + Math.random() * 0.8;
           enemy.burstRemaining = isRPK ? 6 : isSVD ? 1 : 3;
+        }
         }
       }
 
@@ -693,6 +705,15 @@ export class GuerrillaAiDirector {
 
         friendly.shootCooldown -= dt;
         if (friendly.shootCooldown <= 0 && minEnemyDist < 42) {
+          const clearShot =
+            !hasLineOfSight ||
+            hasLineOfSight(
+              { x: friendly.position.x, z: friendly.position.z },
+              { x: nearestEnemy.position.x, z: nearestEnemy.position.z }
+            );
+          if (!clearShot) {
+            friendly.shootCooldown = 0.4;
+          } else {
           const isSAW = friendly.role.includes('SAW');
           friendly.shootCooldown = isSAW ? 1.0 : 1.4 + Math.random() * 0.6;
           tacticalAudio.playM4Fire();
@@ -733,6 +754,7 @@ export class GuerrillaAiDirector {
 
             const bark = barks[Math.floor(Math.random() * barks.length)];
             this.broadcastBark(friendly.id, friendly.callsign, bark, true);
+          }
           }
         }
       } else {
