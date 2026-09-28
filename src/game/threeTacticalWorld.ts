@@ -13,13 +13,90 @@ export interface TacticalProjectile {
 export interface TacticalObstacle {
   id: string;
   mesh: THREE.Mesh;
-  type: 'crate' | 'wall' | 'perimeter';
+  type: 'crate' | 'wall' | 'perimeter' | 'barrier';
   pos: { x: number; y: number; z: number };
   vel: { x: number; z: number };
   size: { x: number; y: number; z: number };
   movable: boolean;
   mass: number;
 }
+
+/** Designated spawn pad for bluefor / opfor tactical testing. */
+export interface SpawnZone {
+  id: string;
+  faction: 'friendly' | 'enemy';
+  label: string;
+  /** Center of the spawn pad on the XZ plane. */
+  position: { x: number; z: number };
+  /** Half-extents of the pad (meters). */
+  halfSize: { x: number; z: number };
+}
+
+/** Canonical spawn layout — shared by the scene builder and AI director. */
+export const TACTICAL_SPAWN_ZONES: SpawnZone[] = [
+  {
+    id: 'friendly_staging',
+    faction: 'friendly',
+    label: 'BLUEFOR Staging',
+    position: { x: 0, z: 22 },
+    halfSize: { x: 8, z: 5 },
+  },
+  {
+    id: 'enemy_north_gate',
+    faction: 'enemy',
+    label: 'OPFOR North Gate',
+    position: { x: 0, z: -38 },
+    halfSize: { x: 6, z: 3 },
+  },
+  {
+    id: 'enemy_west_alley',
+    faction: 'enemy',
+    label: 'OPFOR West Alley',
+    position: { x: -36, z: -4 },
+    halfSize: { x: 3, z: 6 },
+  },
+  {
+    id: 'enemy_east_alley',
+    faction: 'enemy',
+    label: 'OPFOR East Alley',
+    position: { x: 36, z: -4 },
+    halfSize: { x: 3, z: 6 },
+  },
+  {
+    id: 'enemy_nw_warehouse',
+    faction: 'enemy',
+    label: 'OPFOR NW Breach',
+    position: { x: -26, z: -32 },
+    halfSize: { x: 4, z: 3 },
+  },
+  {
+    id: 'enemy_ne_warehouse',
+    faction: 'enemy',
+    label: 'OPFOR NE Breach',
+    position: { x: 26, z: -32 },
+    halfSize: { x: 4, z: 3 },
+  },
+];
+
+/** Cover nodes aligned to the urban compound berms / Jersey lanes. */
+export const TACTICAL_COVER_NODES: Array<{
+  id: string;
+  position: { x: number; y: number; z: number };
+  isHighGround: boolean;
+}> = [
+  { id: 'c1_berm_mid_w', position: { x: -12, y: 0, z: -8 }, isHighGround: false },
+  { id: 'c2_berm_mid_e', position: { x: 12, y: 0, z: -8 }, isHighGround: false },
+  { id: 'c3_north_berm', position: { x: 0, y: 0, z: -34 }, isHighGround: true },
+  { id: 'c4_jersey_court_w', position: { x: -4, y: 0, z: 0 }, isHighGround: false },
+  { id: 'c5_jersey_court_e', position: { x: 4, y: 0, z: 0 }, isHighGround: false },
+  { id: 'c6_flank_w', position: { x: -26, y: 0, z: 2 }, isHighGround: false },
+  { id: 'c7_flank_e', position: { x: 26, y: 0, z: 2 }, isHighGround: false },
+  { id: 'c8_screen_sw', position: { x: -14, y: 0, z: 10 }, isHighGround: false },
+  { id: 'c9_screen_se', position: { x: 14, y: 0, z: 10 }, isHighGround: false },
+  { id: 'c10_staging_jersey', position: { x: 0, y: 0, z: 16 }, isHighGround: false },
+  { id: 'c11_nw_door', position: { x: -18, y: 0, z: -23 }, isHighGround: false },
+  { id: 'c12_ne_door', position: { x: 18, y: 0, z: -23 }, isHighGround: false },
+];
 
 export class ThreeTacticalWorld {
   public scene: THREE.Scene;
@@ -42,6 +119,9 @@ export class ThreeTacticalWorld {
 
   // Physical Obstacles with 1:1 Visual Mesh & AABB Collision (ZERO INVISIBLE OBSTACLES)
   public obstacles: TacticalObstacle[] = [];
+
+  /** Marked spawn pads used by AI director / LOS & movement tests. */
+  public spawnZones: SpawnZone[] = [];
 
   // Projectiles
   public projectiles: TacticalProjectile[] = [];
@@ -122,9 +202,10 @@ export class ThreeTacticalWorld {
     this.gridHelper.position.y = 0.02;
     this.scene.add(this.gridHelper);
 
-    // 3. Player: Bright Green Box + Directional Aim Barrel
+    // 3. Player: Bright Green Box + Directional Aim Barrel (starts on BLUEFOR staging pad)
     this.playerGroup = new THREE.Group();
-    this.playerGroup.position.set(0, 0.9, 0);
+    const friendlyPad = TACTICAL_SPAWN_ZONES.find((z) => z.id === 'friendly_staging');
+    this.playerGroup.position.set(friendlyPad?.position.x ?? 0, 0.9, friendlyPad?.position.z ?? 22);
 
     const playerGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
     const playerMat = new THREE.MeshStandardMaterial({
@@ -181,16 +262,141 @@ export class ThreeTacticalWorld {
 
   // --- PHYSICAL OBSTACLES: EVERY COLLISION OBJECT HAS A 1:1 VISIBLE 3D MESH ---
   private buildPhysicalCompound(): void {
-    // 1. Movable Wood Supply Crates
+    this.buildPerimeterWalls();
+    this.buildUrbanInterior();
+    this.buildJerseyBarriers();
+    this.buildSupplyCrates();
+    this.buildSpawnZones();
+    this.buildCornerWatchtowers();
+  }
+
+  /** Outer security ring — visible BoxGeometry walls, zero invisible bounds. */
+  private buildPerimeterWalls(): void {
+    const perimeterMat = new THREE.MeshStandardMaterial({
+      color: 0x475569,
+      roughness: 0.6,
+    });
+
+    const perimeters = [
+      { id: 'perim_north', x: 0, z: -44, sx: 88, sy: 2.2, sz: 1.2 },
+      { id: 'perim_south', x: 0, z: 44, sx: 88, sy: 2.2, sz: 1.2 },
+      { id: 'perim_west', x: -44, z: 0, sx: 1.2, sy: 2.2, sz: 88 },
+      { id: 'perim_east', x: 44, z: 0, sx: 1.2, sy: 2.2, sz: 88 },
+    ];
+
+    perimeters.forEach((p) => {
+      this.addSolidBox(p.id, 'perimeter', p.x, p.z, p.sx, p.sy, p.sz, perimeterMat, 9999);
+    });
+  }
+
+  /**
+   * Urban compound interior: building shells + blast walls that carve
+   * alley corridors for line-of-sight and flanking movement tests.
+   */
+  private buildUrbanInterior(): void {
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.72 });
+    const darkWallMat = new THREE.MeshStandardMaterial({ color: 0x52606d, roughness: 0.78 });
+
+    // Building shells (hollow courtyards formed by wall segments with door gaps)
+    // NW warehouse — open doorway facing east
+    this.addSolidBox('bldg_nw_n', 'wall', -26, -28, 14, 2.4, 1.2, darkWallMat);
+    this.addSolidBox('bldg_nw_s', 'wall', -26, -18, 14, 2.4, 1.2, darkWallMat);
+    this.addSolidBox('bldg_nw_w', 'wall', -33, -23, 1.2, 2.4, 10, darkWallMat);
+    this.addSolidBox('bldg_nw_e_n', 'wall', -19, -26, 1.2, 2.4, 4, darkWallMat); // door gap at (-19, -23)
+
+    // NE warehouse — open doorway facing west
+    this.addSolidBox('bldg_ne_n', 'wall', 26, -28, 14, 2.4, 1.2, darkWallMat);
+    this.addSolidBox('bldg_ne_s', 'wall', 26, -18, 14, 2.4, 1.2, darkWallMat);
+    this.addSolidBox('bldg_ne_e', 'wall', 33, -23, 1.2, 2.4, 10, darkWallMat);
+    this.addSolidBox('bldg_ne_w_n', 'wall', 19, -26, 1.2, 2.4, 4, darkWallMat); // door gap at (19, -23)
+
+    // SW garage block — north-facing bay
+    this.addSolidBox('bldg_sw_s', 'wall', -22, 28, 16, 2.2, 1.2, wallMat);
+    this.addSolidBox('bldg_sw_w', 'wall', -30, 22, 1.2, 2.2, 12, wallMat);
+    this.addSolidBox('bldg_sw_e', 'wall', -14, 24, 1.2, 2.2, 8, wallMat);
+    this.addSolidBox('bldg_sw_n_w', 'wall', -26, 16, 8, 2.2, 1.2, wallMat); // bay gap at (-18, 16)
+
+    // SE garage block — north-facing bay
+    this.addSolidBox('bldg_se_s', 'wall', 22, 28, 16, 2.2, 1.2, wallMat);
+    this.addSolidBox('bldg_se_e', 'wall', 30, 22, 1.2, 2.2, 12, wallMat);
+    this.addSolidBox('bldg_se_w', 'wall', 14, 24, 1.2, 2.2, 8, wallMat);
+    this.addSolidBox('bldg_se_n_e', 'wall', 26, 16, 8, 2.2, 1.2, wallMat); // bay gap at (18, 16)
+
+    // Central blast berms — create a north–south kill lane with side cover
+    this.addSolidBox('berm_north', 'wall', 0, -34, 18, 2.0, 1.4, wallMat);
+    this.addSolidBox('berm_mid_w', 'wall', -12, -8, 10, 1.9, 1.3, wallMat);
+    this.addSolidBox('berm_mid_e', 'wall', 12, -8, 10, 1.9, 1.3, wallMat);
+    this.addSolidBox('berm_cross_n', 'wall', 0, -16, 8, 1.8, 1.3, wallMat);
+
+    // Flanking L-walls that break long east–west sightlines
+    this.addSolidBox('flank_w_n', 'wall', -30, -6, 1.3, 1.9, 8, wallMat);
+    this.addSolidBox('flank_w_s', 'wall', -26, 2, 8, 1.9, 1.3, wallMat);
+    this.addSolidBox('flank_e_n', 'wall', 30, -6, 1.3, 1.9, 8, wallMat);
+    this.addSolidBox('flank_e_s', 'wall', 26, 2, 8, 1.9, 1.3, wallMat);
+
+    // South staging screen (partial — leaves center approach open for friendlies)
+    this.addSolidBox('screen_sw', 'wall', -14, 10, 10, 1.7, 1.2, wallMat);
+    this.addSolidBox('screen_se', 'wall', 14, 10, 10, 1.7, 1.2, wallMat);
+  }
+
+  /**
+   * Jersey barriers — stacked BoxGeometry approximating the classic
+   * concrete trapezoid profile. Low cover that blocks bullets & movement
+   * but leaves upper sightlines for testing crouched vs standing LOS.
+   */
+  private buildJerseyBarriers(): void {
+    // Rows that form choke corridors and staggered mid-field cover
+    const rows: Array<{ x: number; z: number; rotY: number }> = [
+      // North approach chokepoint (gate funnels)
+      { x: -6, z: -38, rotY: 0 },
+      { x: 6, z: -38, rotY: 0 },
+      { x: -10, z: -30, rotY: Math.PI / 2 },
+      { x: 10, z: -30, rotY: Math.PI / 2 },
+
+      // Central courtyard staggered cover
+      { x: -4, z: 0, rotY: 0 },
+      { x: 4, z: 0, rotY: 0 },
+      { x: -8, z: 4, rotY: Math.PI / 2 },
+      { x: 8, z: 4, rotY: Math.PI / 2 },
+      { x: 0, z: -4, rotY: 0 },
+
+      // East / west alley chokes
+      { x: -36, z: -12, rotY: Math.PI / 2 },
+      { x: -36, z: 4, rotY: Math.PI / 2 },
+      { x: 36, z: -12, rotY: Math.PI / 2 },
+      { x: 36, z: 4, rotY: Math.PI / 2 },
+
+      // Friendly staging forward cover
+      { x: -6, z: 16, rotY: 0 },
+      { x: 6, z: 16, rotY: 0 },
+      { x: -10, z: 20, rotY: Math.PI / 2 },
+      { x: 10, z: 20, rotY: Math.PI / 2 },
+    ];
+
+    rows.forEach((b, idx) => {
+      this.addJerseyBarrier(`jersey_${idx}`, b.x, b.z, b.rotY);
+    });
+  }
+
+  /** Movable wood crates for pushable cover tests. */
+  private buildSupplyCrates(): void {
     const crateGeo = new THREE.BoxGeometry(2.2, 1.8, 2.2);
     const crateMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706, // Warm wood orange-amber
+      color: 0xd97706,
       roughness: 0.5,
       metalness: 0.1,
     });
 
     const crateLocations = [
-      [-14, -14], [14, -14], [-16, 14], [16, 14], [-24, -2], [24, -2]
+      [-14, -14],
+      [14, -14],
+      [-18, 6],
+      [18, 6],
+      [-24, -2],
+      [24, -2],
+      [0, 8],
+      [-8, -22],
+      [8, -22],
     ];
 
     crateLocations.forEach(([x, z], idx) => {
@@ -211,77 +417,63 @@ export class ThreeTacticalWorld {
         mass: 50,
       });
     });
+  }
 
-    // 2. Concrete Blast Walls (Solid Axis-Aligned Cover)
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 });
+  /**
+   * Designated friendly / enemy spawn pads — thin emissive ground markers
+   * so testers can see staging areas while validating LOS & movement.
+   */
+  private buildSpawnZones(): void {
+    this.spawnZones = TACTICAL_SPAWN_ZONES.map((z) => ({ ...z }));
 
-    const solidWalls = [
-      { x: -14, z: -24, sx: 10, sy: 1.8, sz: 1.4 },
-      { x: 14, z: -24, sx: 10, sy: 1.8, sz: 1.4 },
-      { x: 0, z: -34, sx: 16, sy: 2.0, sz: 1.4 }, // North Bunker berm
-      { x: -28, z: -10, sx: 1.4, sy: 1.8, sz: 10 }, // West berm
-      { x: 28, z: -10, sx: 1.4, sy: 1.8, sz: 10 },  // East berm
-    ];
+    this.spawnZones.forEach((zone) => {
+      const isFriendly = zone.faction === 'friendly';
+      const color = isFriendly ? 0x22c55e : 0xef4444;
+      const padGeo = new THREE.BoxGeometry(zone.halfSize.x * 2, 0.08, zone.halfSize.z * 2);
+      const padMat = new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.35,
+        roughness: 0.9,
+        transparent: true,
+        opacity: 0.45,
+      });
+      const pad = new THREE.Mesh(padGeo, padMat);
+      pad.position.set(zone.position.x, 0.06, zone.position.z);
+      pad.receiveShadow = true;
+      this.scene.add(pad);
 
-    solidWalls.forEach((w, idx) => {
-      const geo = new THREE.BoxGeometry(w.sx, w.sy, w.sz);
-      const wallMesh = new THREE.Mesh(geo, wallMat);
-      wallMesh.position.set(w.x, w.sy / 2, w.z);
-      wallMesh.castShadow = true;
-      wallMesh.receiveShadow = true;
-      this.scene.add(wallMesh);
-
-      this.obstacles.push({
-        id: `wall_${idx}`,
-        mesh: wallMesh,
-        type: 'wall',
-        pos: { x: w.x, y: w.sy / 2, z: w.z },
-        vel: { x: 0, z: 0 },
-        size: { x: w.sx, y: w.sy, z: w.sz },
-        movable: false,
-        mass: 1000,
+      // Corner posts so the pad reads clearly from the tactical camera
+      const postGeo = new THREE.BoxGeometry(0.25, 0.9, 0.25);
+      const postMat = new THREE.MeshStandardMaterial({
+        color,
+        emissive: color,
+        emissiveIntensity: 0.5,
+        roughness: 0.4,
+      });
+      const corners: Array<[number, number]> = [
+        [-zone.halfSize.x, -zone.halfSize.z],
+        [zone.halfSize.x, -zone.halfSize.z],
+        [-zone.halfSize.x, zone.halfSize.z],
+        [zone.halfSize.x, zone.halfSize.z],
+      ];
+      corners.forEach(([cx, cz]) => {
+        const post = new THREE.Mesh(postGeo, postMat);
+        post.position.set(zone.position.x + cx, 0.45, zone.position.z + cz);
+        post.castShadow = true;
+        this.scene.add(post);
       });
     });
+  }
 
-    // 3. VISIBLE PERIMETER SECURITY WALLS AROUND ENTIRE COMPOUND (44m boundary)
-    // Clearly marks the boundary with visible concrete barriers and hazard stripes so there are ZERO invisible walls!
-    const perimeterMat = new THREE.MeshStandardMaterial({
-      color: 0x475569,
-      roughness: 0.6,
-    });
-
-    const perimeters = [
-      { id: 'perim_north', x: 0, z: -44, sx: 88, sy: 2.2, sz: 1.2 },
-      { id: 'perim_south', x: 0, z: 44, sx: 88, sy: 2.2, sz: 1.2 },
-      { id: 'perim_west', x: -44, z: 0, sx: 1.2, sy: 2.2, sz: 88 },
-      { id: 'perim_east', x: 44, z: 0, sx: 1.2, sy: 2.2, sz: 88 },
-    ];
-
-    perimeters.forEach((p) => {
-      const geo = new THREE.BoxGeometry(p.sx, p.sy, p.sz);
-      const mesh = new THREE.Mesh(geo, perimeterMat);
-      mesh.position.set(p.x, p.sy / 2, p.z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      this.scene.add(mesh);
-
-      this.obstacles.push({
-        id: p.id,
-        mesh,
-        type: 'perimeter',
-        pos: { x: p.x, y: p.sy / 2, z: p.z },
-        vel: { x: 0, z: 0 },
-        size: { x: p.sx, y: p.sy, z: p.sz },
-        movable: false,
-        mass: 9999,
-      });
-    });
-
-    // Corner Watchtowers for atmospheric boundary markers
+  private buildCornerWatchtowers(): void {
     const towerGeo = new THREE.CylinderGeometry(1.2, 1.4, 4.5, 8);
     const towerMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
     const cornerPositions = [
-      [-44, -44], [44, -44], [-44, 44], [44, 44]
+      [-44, -44],
+      [44, -44],
+      [-44, 44],
+      [44, 44],
     ];
     cornerPositions.forEach(([x, z]) => {
       const tower = new THREE.Mesh(towerGeo, towerMat);
@@ -289,6 +481,148 @@ export class ThreeTacticalWorld {
       tower.castShadow = true;
       this.scene.add(tower);
     });
+  }
+
+  /** Axis-aligned solid BoxGeometry wall registered for collision + ballistics. */
+  private addSolidBox(
+    id: string,
+    type: TacticalObstacle['type'],
+    x: number,
+    z: number,
+    sx: number,
+    sy: number,
+    sz: number,
+    material: THREE.Material,
+    mass = 1000
+  ): void {
+    const geo = new THREE.BoxGeometry(sx, sy, sz);
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.position.set(x, sy / 2, z);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    this.scene.add(mesh);
+
+    this.obstacles.push({
+      id,
+      mesh,
+      type,
+      pos: { x, y: sy / 2, z },
+      vel: { x: 0, z: 0 },
+      size: { x: sx, y: sy, z: sz },
+      movable: false,
+      mass,
+    });
+  }
+
+  /**
+   * Classic Jersey barrier approximated with two BoxGeometry sections:
+   * wide base foot + narrower upper wall (~3.2m long × 0.85m tall).
+   * Collision AABB uses the full footprint so movement & bullets both stop.
+   */
+  private addJerseyBarrier(id: string, x: number, z: number, rotY = 0): void {
+    const group = new THREE.Group();
+    group.position.set(x, 0, z);
+    group.rotation.y = rotY;
+
+    const concreteMat = new THREE.MeshStandardMaterial({
+      color: 0x9ca3af,
+      roughness: 0.85,
+      metalness: 0.05,
+    });
+    const stripeMat = new THREE.MeshStandardMaterial({
+      color: 0xf59e0b,
+      roughness: 0.55,
+      emissive: 0xb45309,
+      emissiveIntensity: 0.15,
+    });
+
+    // Base foot (wider)
+    const base = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.35, 0.7), concreteMat);
+    base.position.y = 0.175;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    // Upper barrier body (narrower trapezoid stand-in)
+    const body = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.5, 0.38), concreteMat);
+    body.position.y = 0.6;
+    body.castShadow = true;
+    body.receiveShadow = true;
+    group.add(body);
+
+    // Hazard stripe on the face
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.12, 0.4), stripeMat);
+    stripe.position.y = 0.55;
+    group.add(stripe);
+
+    this.scene.add(group);
+
+    // Collision uses the rotated AABB of the full barrier footprint
+    const cos = Math.abs(Math.cos(rotY));
+    const sin = Math.abs(Math.sin(rotY));
+    const localW = 3.2;
+    const localD = 0.7;
+    const aabbX = localW * cos + localD * sin;
+    const aabbZ = localW * sin + localD * cos;
+
+    // Proxy mesh for obstacle bookkeeping (matches AABB center)
+    const proxyGeo = new THREE.BoxGeometry(aabbX, 0.85, aabbZ);
+    const proxyMat = new THREE.MeshBasicMaterial({ visible: false });
+    const proxyMesh = new THREE.Mesh(proxyGeo, proxyMat);
+    proxyMesh.position.set(x, 0.425, z);
+    this.scene.add(proxyMesh);
+
+    this.obstacles.push({
+      id,
+      mesh: proxyMesh,
+      type: 'barrier',
+      pos: { x, y: 0.425, z },
+      vel: { x: 0, z: 0 },
+      size: { x: aabbX, y: 0.85, z: aabbZ },
+      movable: false,
+      mass: 800,
+    });
+  }
+
+  /** Look up a spawn zone by id (used by AI director / test harnesses). */
+  public getSpawnZone(id: string): SpawnZone | undefined {
+    return this.spawnZones.find((z) => z.id === id);
+  }
+
+  public getSpawnZonesByFaction(faction: 'friendly' | 'enemy'): SpawnZone[] {
+    return this.spawnZones.filter((z) => z.faction === faction);
+  }
+
+  /**
+   * Axis-aligned LOS probe against solid obstacles (walls, barriers, perimeter, crates).
+   * Returns true when the segment from A→B is unobstructed at chest height.
+   */
+  public hasLineOfSight(
+    from: { x: number; z: number },
+    to: { x: number; z: number },
+    minCoverHeight = 0.7
+  ): boolean {
+    const dx = to.x - from.x;
+    const dz = to.z - from.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.01) return true;
+
+    const steps = Math.max(4, Math.ceil(dist / 0.5));
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const px = from.x + dx * t;
+      const pz = from.z + dz * t;
+
+      for (const obs of this.obstacles) {
+        if (obs.size.y < minCoverHeight) continue;
+        const halfX = obs.size.x / 2;
+        const halfZ = obs.size.z / 2;
+        if (Math.abs(px - obs.pos.x) <= halfX && Math.abs(pz - obs.pos.z) <= halfZ) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   // --- PHYSICS ENGINE: CRATE MOMENTUM & DAMPING ---

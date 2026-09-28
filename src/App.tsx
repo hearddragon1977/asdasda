@@ -242,8 +242,8 @@ function TacticalAppContent() {
       message: '',
       squadMembers: [],
     });
-    // Respawn Friendly AI squad with full health and full combat readiness
-    aiDirector.spawnFriendlySquad({ x: 0, z: 0 });
+    // Respawn Friendly AI squad on BLUEFOR staging pad with full combat readiness
+    aiDirector.spawnFriendlySquad();
     setFriendlies([...aiDirector.friendlies]);
     // Replenish weapon ammunition
     setWeapon((prev) => ({
