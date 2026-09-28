@@ -1,5 +1,16 @@
 import { EnemyCombatant, EnemyAction, FriendlyCombatant } from '../types/game';
 import { tacticalAudio } from '../audio/tacticalAudio';
+import { TACTICAL_COVER_NODES, TACTICAL_SPAWN_ZONES } from './threeTacticalWorld';
+
+function spawnZonePos(id: string): { x: number; y: number; z: number } {
+  const zone = TACTICAL_SPAWN_ZONES.find((z) => z.id === id);
+  return { x: zone?.position.x ?? 0, y: 0, z: zone?.position.z ?? 0 };
+}
+
+function friendlyStagingAnchor(): { x: number; z: number } {
+  const zone = TACTICAL_SPAWN_ZONES.find((z) => z.id === 'friendly_staging');
+  return { x: zone?.position.x ?? 0, z: zone?.position.z ?? 22 };
+}
 
 export interface CoverNode {
   id: string;
@@ -49,21 +60,14 @@ export class GuerrillaAiDirector {
   }
 
   private initCoverNodes(): void {
-    this.coverNodes = [
-      { id: 'c1_west_berm', position: { x: -14, y: 0, z: -24 }, isHighGround: false, occupantId: null },
-      { id: 'c2_east_berm', position: { x: 14, y: 0, z: -24 }, isHighGround: false, occupantId: null },
-      { id: 'c3_center_crates_w', position: { x: -14, y: 0, z: -14 }, isHighGround: false, occupantId: null },
-      { id: 'c4_center_crates_e', position: { x: 14, y: 0, z: -14 }, isHighGround: false, occupantId: null },
-      { id: 'c5_north_bunker', position: { x: 0, y: 0, z: -34 }, isHighGround: true, occupantId: null },
-      { id: 'c6_west_crates', position: { x: -24, y: 0, z: -2 }, isHighGround: false, occupantId: null },
-      { id: 'c7_east_crates', position: { x: 24, y: 0, z: -2 }, isHighGround: false, occupantId: null },
-      { id: 'c8_south_cover_w', position: { x: -16, y: 0, z: 14 }, isHighGround: false, occupantId: null },
-      { id: 'c9_south_cover_e', position: { x: 16, y: 0, z: 14 }, isHighGround: false, occupantId: null },
-    ];
+    this.coverNodes = TACTICAL_COVER_NODES.map((n) => ({
+      ...n,
+      occupantId: null,
+    }));
   }
 
   // --- FRIENDLY AI SQUAD: RESPAWN & TACTICAL FIRETEAM INITIALIZATION ---
-  public spawnFriendlySquad(playerAnchor = { x: 0, z: 0 }): void {
+  public spawnFriendlySquad(playerAnchor = friendlyStagingAnchor()): void {
     const prevDoc = this.friendlies.find((f) => f.id === 'doc_miller');
     const prevRuiz = this.friendlies.find((f) => f.id === 'sgt_ruiz');
     const prevOrtiz = this.friendlies.find((f) => f.id === 'cpl_ortiz');
@@ -159,35 +163,41 @@ export class GuerrillaAiDirector {
     this.waveSpawnPending = false;
     this.commanderOrderTimer = 3.0;
 
-    // Pick a randomized infiltration approach so the player can never sit and camp one angle!
+    // Approaches map onto designated OPFOR spawn pads on the urban compound.
     const approaches = ['north_assault', 'east_flank', 'west_breach', 'pincer_ambush'] as const;
     const approach = approaches[Math.floor(Math.random() * approaches.length)];
 
-    let sgtPos = { x: 0, y: 0, z: -32 };
-    let rpkPos = { x: -14, y: 0, z: -25 };
-    let svdPos = { x: 14, y: 0, z: -30 };
-    let flankWPos = { x: -26, y: 0, z: -15 };
-    let flankEPos = { x: 26, y: 0, z: -15 };
+    const north = spawnZonePos('enemy_north_gate');
+    const west = spawnZonePos('enemy_west_alley');
+    const east = spawnZonePos('enemy_east_alley');
+    const nw = spawnZonePos('enemy_nw_warehouse');
+    const ne = spawnZonePos('enemy_ne_warehouse');
+
+    // All OPFOR start on marked enemy pads — never inside the BLUEFOR staging courtyard.
+    let sgtPos = { ...north };
+    let rpkPos = { x: nw.x + 3, y: 0, z: nw.z + 2 };
+    let svdPos = { x: ne.x - 3, y: 0, z: ne.z + 2 };
+    let flankWPos = { x: west.x + 2, y: 0, z: west.z - 4 };
+    let flankEPos = { x: east.x - 2, y: 0, z: east.z - 4 };
 
     if (approach === 'east_flank') {
-      sgtPos = { x: 28, y: 0, z: -10 };
-      rpkPos = { x: 32, y: 0, z: 5 };
-      svdPos = { x: 34, y: 0, z: -25 };
-      flankWPos = { x: 15, y: 0, z: 20 };
-      flankEPos = { x: 28, y: 0, z: -20 };
+      sgtPos = { ...east };
+      rpkPos = { x: east.x - 1, y: 0, z: east.z + 5 };
+      svdPos = { ...ne };
+      flankWPos = { x: east.x - 2, y: 0, z: east.z - 5 };
+      flankEPos = { x: ne.x - 2, y: 0, z: ne.z + 3 };
     } else if (approach === 'west_breach') {
-      sgtPos = { x: -28, y: 0, z: -10 };
-      rpkPos = { x: -32, y: 0, z: 5 };
-      svdPos = { x: -34, y: 0, z: -25 };
-      flankWPos = { x: -28, y: 0, z: -20 };
-      flankEPos = { x: -15, y: 0, z: 20 };
+      sgtPos = { ...west };
+      rpkPos = { x: west.x + 1, y: 0, z: west.z + 5 };
+      svdPos = { ...nw };
+      flankWPos = { x: nw.x + 2, y: 0, z: nw.z + 3 };
+      flankEPos = { x: west.x + 2, y: 0, z: west.z - 5 };
     } else if (approach === 'pincer_ambush') {
-      // 360-degree split assault
-      sgtPos = { x: 0, y: 0, z: -34 };
-      rpkPos = { x: -26, y: 0, z: 0 };
-      svdPos = { x: 26, y: 0, z: 0 };
-      flankWPos = { x: -20, y: 0, z: 24 };
-      flankEPos = { x: 20, y: 0, z: 24 };
+      sgtPos = { ...north };
+      rpkPos = { ...west };
+      svdPos = { ...east };
+      flankWPos = { ...nw };
+      flankEPos = { ...ne };
     }
 
     const waveRoster: EnemyCombatant[] = [
@@ -341,7 +351,7 @@ export class GuerrillaAiDirector {
   }
 
   public spawnInitialSquad(): void {
-    this.spawnFriendlySquad({ x: 0, z: 0 });
+    this.spawnFriendlySquad(friendlyStagingAnchor());
     this.spawnWave(1);
   }
 
@@ -508,7 +518,8 @@ export class GuerrillaAiDirector {
       to: { x: number; y: number; z: number },
       isBluefor: boolean,
       shooterId: string
-    ) => void
+    ) => void,
+    hasLineOfSight?: (from: { x: number; z: number }, to: { x: number; z: number }) => boolean
   ): void {
     if (this.waveSpawnPending) {
       this.waveSpawnTimer -= dt;
@@ -543,9 +554,19 @@ export class GuerrillaAiDirector {
 
       enemy.rotationY = Math.atan2(dx, dz);
 
-      // Rapid burst shooting
+      // Rapid burst shooting — gated by compound LOS so walls/barriers matter
       enemy.shootCooldown = (enemy.shootCooldown ?? 1.0) - dt;
       if (enemy.shootCooldown <= 0 && dist < 42) {
+        const clearShot =
+          !hasLineOfSight ||
+          hasLineOfSight(
+            { x: enemy.position.x, z: enemy.position.z },
+            { x: targetPos.x, z: targetPos.z }
+          );
+        if (!clearShot) {
+          enemy.shootCooldown = 0.35;
+          // Keep advancing / flanking when blocked; don't burn ammo into walls
+        } else {
         const isRPK = enemy.role.includes('RPK');
         const isSVD = enemy.role.includes('SVD');
 
@@ -570,6 +591,7 @@ export class GuerrillaAiDirector {
         } else {
           enemy.shootCooldown = isRPK ? 1.4 : isSVD ? 2.2 : 1.6 + Math.random() * 0.8;
           enemy.burstRemaining = isRPK ? 6 : isSVD ? 1 : 3;
+        }
         }
       }
 
@@ -683,6 +705,15 @@ export class GuerrillaAiDirector {
 
         friendly.shootCooldown -= dt;
         if (friendly.shootCooldown <= 0 && minEnemyDist < 42) {
+          const clearShot =
+            !hasLineOfSight ||
+            hasLineOfSight(
+              { x: friendly.position.x, z: friendly.position.z },
+              { x: nearestEnemy.position.x, z: nearestEnemy.position.z }
+            );
+          if (!clearShot) {
+            friendly.shootCooldown = 0.4;
+          } else {
           const isSAW = friendly.role.includes('SAW');
           friendly.shootCooldown = isSAW ? 1.0 : 1.4 + Math.random() * 0.6;
           tacticalAudio.playM4Fire();
@@ -723,6 +754,7 @@ export class GuerrillaAiDirector {
 
             const bark = barks[Math.floor(Math.random() * barks.length)];
             this.broadcastBark(friendly.id, friendly.callsign, bark, true);
+          }
           }
         }
       } else {

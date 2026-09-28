@@ -307,7 +307,8 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           { x: playerPos.x, y: playerPos.y, z: playerPos.z },
           (from, to, isBluefor, shooterId) => {
             world.shootBullet(from, to, isBluefor, shooterId);
-          }
+          },
+          (from, to) => world.hasLineOfSight(from, to)
         );
 
         // Sync 3D Meshes
