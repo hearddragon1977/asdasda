@@ -334,9 +334,12 @@ export class ThreeTacticalWorld {
     this.addSolidBox('flank_e_n', 'wall', 30, -6, 1.3, 1.9, 8, wallMat);
     this.addSolidBox('flank_e_s', 'wall', 26, 2, 8, 1.9, 1.3, wallMat);
 
-    // South staging screen (partial — leaves center approach open for friendlies)
-    this.addSolidBox('screen_sw', 'wall', -14, 10, 10, 1.7, 1.2, wallMat);
-    this.addSolidBox('screen_se', 'wall', 14, 10, 10, 1.7, 1.2, wallMat);
+    // South staging screen — tighter center gap so BLUEFOR pad isn't an open kill lane
+    this.addSolidBox('screen_sw', 'wall', -10, 10, 14, 1.7, 1.2, wallMat);
+    this.addSolidBox('screen_se', 'wall', 10, 10, 14, 1.7, 1.2, wallMat);
+    // Extra mid-lane Jersey-height blockers just north of staging
+    this.addSolidBox('screen_mid_w', 'wall', -5, 6, 6, 1.5, 1.1, wallMat);
+    this.addSolidBox('screen_mid_e', 'wall', 5, 6, 6, 1.5, 1.1, wallMat);
   }
 
   /**

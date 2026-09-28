@@ -173,30 +173,31 @@ export class GuerrillaAiDirector {
     const nw = spawnZonePos('enemy_nw_warehouse');
     const ne = spawnZonePos('enemy_ne_warehouse');
 
+    // All OPFOR start on marked enemy pads — never inside the BLUEFOR staging courtyard.
     let sgtPos = { ...north };
-    let rpkPos = { x: nw.x + 4, y: 0, z: nw.z + 4 };
-    let svdPos = { x: ne.x - 4, y: 0, z: ne.z + 4 };
-    let flankWPos = { x: west.x + 4, y: 0, z: west.z - 6 };
-    let flankEPos = { x: east.x - 4, y: 0, z: east.z - 6 };
+    let rpkPos = { x: nw.x + 3, y: 0, z: nw.z + 2 };
+    let svdPos = { x: ne.x - 3, y: 0, z: ne.z + 2 };
+    let flankWPos = { x: west.x + 2, y: 0, z: west.z - 4 };
+    let flankEPos = { x: east.x - 2, y: 0, z: east.z - 4 };
 
     if (approach === 'east_flank') {
       sgtPos = { ...east };
-      rpkPos = { x: east.x - 2, y: 0, z: east.z + 8 };
+      rpkPos = { x: east.x - 1, y: 0, z: east.z + 5 };
       svdPos = { ...ne };
-      flankWPos = { x: 15, y: 0, z: 12 };
-      flankEPos = { x: east.x - 4, y: 0, z: east.z - 10 };
+      flankWPos = { x: east.x - 2, y: 0, z: east.z - 5 };
+      flankEPos = { x: ne.x - 2, y: 0, z: ne.z + 3 };
     } else if (approach === 'west_breach') {
       sgtPos = { ...west };
-      rpkPos = { x: west.x + 2, y: 0, z: west.z + 8 };
+      rpkPos = { x: west.x + 1, y: 0, z: west.z + 5 };
       svdPos = { ...nw };
-      flankWPos = { x: west.x + 4, y: 0, z: west.z - 10 };
-      flankEPos = { x: -15, y: 0, z: 12 };
+      flankWPos = { x: nw.x + 2, y: 0, z: nw.z + 3 };
+      flankEPos = { x: west.x + 2, y: 0, z: west.z - 5 };
     } else if (approach === 'pincer_ambush') {
       sgtPos = { ...north };
       rpkPos = { ...west };
       svdPos = { ...east };
-      flankWPos = { ...nw, y: 0 };
-      flankEPos = { ...ne, y: 0 };
+      flankWPos = { ...nw };
+      flankEPos = { ...ne };
     }
 
     const waveRoster: EnemyCombatant[] = [
