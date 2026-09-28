@@ -1,8 +1,9 @@
 import { EnemyCombatant, EnemyAction, FriendlyCombatant } from '../types/game';
 import { tacticalAudio } from '../audio/tacticalAudio';
 import { TACTICAL_COVER_NODES, TACTICAL_SPAWN_ZONES } from './threeTacticalWorld';
+import { CitySpawnLayout } from './cityCollision';
 import { updateEnemySquad } from '../ai/enemyAI.js';
-import { updateFriendlySquad } from '../ai/friendlyAI.js';
+import { setHuntRoute, updateFriendlySquad } from '../ai/friendlyAI.js';
 import { audioManager } from '../systems/audio.js';
 import { equipmentManager } from '../systems/equipment.js';
 import { radioChatter } from '../systems/radioChatter';
@@ -363,6 +364,49 @@ export class GuerrillaAiDirector {
   public spawnInitialSquad(): void {
     this.spawnFriendlySquad(friendlyStagingAnchor());
     this.spawnWave(1);
+  }
+
+  /** Move the squads onto walkable street points after the city mesh loads. */
+  public relocateToCity(layout: CitySpawnLayout): void {
+    const staging = TACTICAL_SPAWN_ZONES.find((zone) => zone.id === 'friendly_staging');
+    if (staging) {
+      staging.position.x = layout.player.x;
+      staging.position.z = layout.player.z;
+    }
+
+    const enemyZones = TACTICAL_SPAWN_ZONES.filter((zone) => zone.faction === 'enemy');
+    layout.enemies.forEach((spot, index) => {
+      const zone = enemyZones[index];
+      if (!zone) return;
+      zone.position.x = spot.x;
+      zone.position.z = spot.z;
+    });
+
+    this.friendlies.forEach((friendly, index) => {
+      const spot = layout.friendlies[index] ?? layout.player;
+      friendly.position.x = spot.x;
+      friendly.position.y = spot.y;
+      friendly.position.z = spot.z;
+    });
+
+    this.enemies.forEach((enemy, index) => {
+      const spot = layout.enemies[index % Math.max(1, layout.enemies.length)];
+      if (!spot) return;
+      enemy.position.x = spot.x;
+      enemy.position.y = spot.y;
+      enemy.position.z = spot.z;
+      enemy.targetPosition = { x: layout.player.x, y: layout.player.y, z: layout.player.z };
+    });
+
+    if (layout.covers.length > 0) {
+      this.coverNodes = layout.covers.map((cover, index) => ({
+        id: `city_cover_${index}`,
+        position: { x: cover.x, y: cover.y, z: cover.z },
+        isHighGround: cover.y > 1.2,
+        occupantId: null,
+      }));
+      setHuntRoute(layout.covers);
+    }
   }
 
   public broadcastBark(speaker: string, callsign: string, barkText: string, isBluefor: boolean): void {

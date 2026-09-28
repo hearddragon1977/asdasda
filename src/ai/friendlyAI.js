@@ -4,6 +4,8 @@
  * on a sector or on the player. One gun keeps a lane while the rest bound in.
  */
 
+import { clampToMap } from '../game/mapBounds';
+
 const ENGAGE_RANGE = 52;
 const MOVE = { bound: 8.4, cover: 7.4, suppress: 6.6 };
 
@@ -21,6 +23,13 @@ let huntCursor = 0;
 let clearingContact = false;
 /** @type {{ x: number, z: number }} */
 let lastContact = { x: 0, z: -18 };
+
+/** Point the search route at walkable spots on the loaded city. */
+export function setHuntRoute(points) {
+  if (!points?.length) return;
+  HUNT_ROUTE.splice(0, HUNT_ROUTE.length, ...points.map((point) => ({ x: point.x, z: point.z })));
+  huntCursor = 0;
+}
 
 /**
  * @typedef {{ x: number, y: number, z: number }} Vec3
@@ -315,8 +324,7 @@ function moveToward(friendly, goal, dt, state) {
   const speed = state === 'bounding' ? MOVE.bound : state === 'suppress' ? MOVE.suppress : MOVE.cover;
   friendly.position.x += (fdx / distToGoal) * speed * dt;
   friendly.position.z += (fdz / distToGoal) * speed * dt;
-  friendly.position.x = Math.max(-42.5, Math.min(42.5, friendly.position.x));
-  friendly.position.z = Math.max(-42.5, Math.min(42.5, friendly.position.z));
+  clampToMap(friendly.position);
 }
 
 /**
@@ -385,8 +393,8 @@ function engageTarget(friendly, enemy, dist, dt, onFireBullet, audio, broadcastB
   const spreadZ = (Math.random() - 0.5) * spread;
 
   onFireBullet(
-    { x: friendly.position.x, y: 0.9, z: friendly.position.z },
-    { x: enemy.position.x + spreadX, y: 0.9, z: enemy.position.z + spreadZ },
+    { x: friendly.position.x, y: (friendly.position.y || 0) + 1.15, z: friendly.position.z },
+    { x: enemy.position.x + spreadX, y: (enemy.position.y || 0) + 1.15, z: enemy.position.z + spreadZ },
     true,
     friendly.id
   );

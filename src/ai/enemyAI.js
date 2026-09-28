@@ -4,6 +4,8 @@
  * hooks a flank and rushes. Wounded friendlies are finished. Nobody falls back.
  */
 
+import { clampToMap } from '../game/mapBounds';
+
 const ENGAGE_RANGE = 52;
 const HOLD = { rush: 5.2, gunner: 11, marksman: 16 };
 const MOVE = { flank: 8.1, advance: 7.2, rush: 8.8, creep: 4.6, strafe: 2.8 };
@@ -251,8 +253,7 @@ function applyMovement(enemy, focus, dist, dt) {
     }
   }
 
-  enemy.position.x = Math.max(-42.5, Math.min(42.5, enemy.position.x));
-  enemy.position.z = Math.max(-42.5, Math.min(42.5, enemy.position.z));
+  clampToMap(enemy.position);
 }
 
 /**
@@ -314,8 +315,8 @@ function applyFire(enemy, targetPos, dist, dt, onFireBullet, audio, hasLineOfSig
   const spreadZ = (Math.random() - 0.5) * spread;
 
   onFireBullet(
-    { x: enemy.position.x, y: 0.9, z: enemy.position.z },
-    { x: targetPos.x + spreadX, y: 0.9, z: targetPos.z + spreadZ },
+    { x: enemy.position.x, y: (enemy.position.y || 0) + 1.15, z: enemy.position.z },
+    { x: targetPos.x + spreadX, y: (targetPos.y || 0) + 1.15, z: targetPos.z + spreadZ },
     false,
     enemy.id
   );

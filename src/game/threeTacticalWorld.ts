@@ -1,8 +1,12 @@
 import * as THREE from 'three';
+import { Capsule } from 'three/addons/math/Capsule.js';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
 import { obstaclesToColliders, stepProjectileThroughCover } from '../systems/ballistics.js';
 import { suppressionSystem } from '../systems/suppression.js';
 import { structuralAssets } from '../systems/assetLoader';
+import { loadGhostCity, loadNightfangTemplate, tintActor } from '../systems/sceneAssets';
+import { CityCollision, CitySpawnLayout } from './cityCollision';
+import { mapBounds } from './mapBounds';
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
@@ -111,13 +115,26 @@ export class ThreeTacticalWorld {
   public renderer: THREE.WebGLRenderer;
 
   // Player & Visuals
-  public playerMesh: THREE.Mesh;
+  public playerMesh: THREE.Object3D;
   public playerGroup: THREE.Group;
   public barrelMesh: THREE.Mesh;
   public godModeRing: THREE.Mesh;
   public tacticalLight: THREE.SpotLight;
-  private baseFov = 50;
+  private baseFov = 72;
   private propUpgradeCancels: Array<() => void> = [];
+  private city: CityCollision | null = null;
+  private characterTemplate: THREE.Object3D | null = null;
+  private playerVelocity = new THREE.Vector3();
+  private playerCollider = new Capsule(new THREE.Vector3(0, 0.35, 22), new THREE.Vector3(0, 1.5, 22), 0.3);
+  private spawnPoint = new THREE.Vector3(0, 0, 22);
+  private lookYaw = 0;
+  private lookPitch = 0;
+  private swayX = 0;
+  private swayZ = 0;
+  private disposed = false;
+  private readonly localActorLayer = 1;
+  public onMapReady?: (layout: CitySpawnLayout) => void;
+  public onMapFailed?: (message: string) => void;
 
   // Ground & Grid
   public groundMesh: THREE.Mesh;
@@ -146,17 +163,21 @@ export class ThreeTacticalWorld {
 
   constructor(container: HTMLDivElement) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x0f172a);
+    this.scene.background = new THREE.Color(0x8ea4b8);
+    this.scene.fog = new THREE.Fog(0x8ea4b8, 24, 145);
 
     const width = container.clientWidth > 0 ? container.clientWidth : window.innerWidth;
     const height = container.clientHeight > 0 ? container.clientHeight : window.innerHeight - 48;
     const aspect = width / height;
 
-    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.1, 1000);
-    this.camera.position.set(0, 32, 24);
-    this.camera.lookAt(0, 0, 0);
+    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.08, 600);
+    this.camera.layers.disable(this.localActorLayer);
+    this.camera.position.set(0, 1.62, 22);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.05;
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -211,39 +232,25 @@ export class ThreeTacticalWorld {
     this.gridHelper = new THREE.GridHelper(96, 48, 0x94a3b8, 0x475569);
     this.gridHelper.position.y = 0.02;
     this.scene.add(this.gridHelper);
+    this.groundMesh.visible = false;
+    this.gridHelper.visible = false;
 
-    // 3. Player: Bright Green Box + Directional Aim Barrel (starts on BLUEFOR staging pad)
+    // Player feet sit on the ground. The body model is attached once Nightfang loads.
+    // It is kept off the first-person camera layer so the view is from the eyes.
     this.playerGroup = new THREE.Group();
     const friendlyPad = TACTICAL_SPAWN_ZONES.find((z) => z.id === 'friendly_staging');
-    this.playerGroup.position.set(friendlyPad?.position.x ?? 0, 0.9, friendlyPad?.position.z ?? 22);
-
-    const playerGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
-    const playerMat = new THREE.MeshStandardMaterial({
-      color: 0x22c55e,
-      roughness: 0.2,
-      emissive: 0x16a34a,
-      emissiveIntensity: 0.5,
-    });
-    this.playerMesh = new THREE.Mesh(playerGeo, playerMat);
-    this.playerMesh.castShadow = true;
+    this.playerGroup.position.set(friendlyPad?.position.x ?? 0, 0, friendlyPad?.position.z ?? 22);
+    this.playerMesh = new THREE.Group();
+    this.playerMesh.layers.set(this.localActorLayer);
     this.playerGroup.add(this.playerMesh);
-
-    // Aim Barrel pointing in positive Z direction of local group
-    const barrelGeo = new THREE.BoxGeometry(0.35, 0.35, 1.4);
-    const barrelMat = new THREE.MeshStandardMaterial({
-      color: 0x022c22,
-      roughness: 0.4,
-      emissive: 0x15803d,
-      emissiveIntensity: 0.4,
-    });
-    this.barrelMesh = new THREE.Mesh(barrelGeo, barrelMat);
-    this.barrelMesh.position.set(0, 0.3, 1.0);
-    this.barrelMesh.castShadow = true;
-    this.playerGroup.add(this.barrelMesh);
+    this.barrelMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.01, 0.01, 0.01),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
 
     this.tacticalLight = new THREE.SpotLight(0xfff2cc, 0, 24, (18 * Math.PI) / 180, 0.45, 1);
-    this.tacticalLight.position.set(0, 0.55, 0.4);
-    this.tacticalLight.target.position.set(0, 0.2, 10);
+    this.tacticalLight.position.set(0.12, 1.48, 0.25);
+    this.tacticalLight.target.position.set(0, 1.4, 10);
     this.tacticalLight.castShadow = false;
     this.playerGroup.add(this.tacticalLight);
     this.playerGroup.add(this.tacticalLight.target);
@@ -258,9 +265,8 @@ export class ThreeTacticalWorld {
     this.playerGroup.add(this.godModeRing);
 
     this.scene.add(this.playerGroup);
-
-    // 4. Physical Obstacles Setup (1:1 Visible Meshes, Zero Invisible Obstacles)
-    this.buildPhysicalCompound();
+    this.syncFeetFromCollider();
+    void this.loadAuthoredCity();
 
     // 5. Setup Resize Observer
     if (typeof ResizeObserver !== 'undefined') {
@@ -275,6 +281,158 @@ export class ThreeTacticalWorld {
       });
       this.resizeObserver.observe(container);
     }
+  }
+
+  private async loadAuthoredCity(): Promise<void> {
+    try {
+      const [mapRoot, character] = await Promise.all([loadGhostCity(), loadNightfangTemplate()]);
+      if (this.disposed) return;
+
+      this.characterTemplate = character;
+      this.attachLocalPlayerModel(character);
+
+      mapRoot.name = 'ghost_city';
+      this.scene.add(mapRoot);
+
+      const city = new CityCollision();
+      city.buildFrom(mapRoot);
+      if (this.disposed) return;
+      this.city = city;
+
+      const layout = city.collectSpawns(4, 6, 12);
+      this.spawnPoint.set(layout.player.x, layout.player.y, layout.player.z);
+      this.placePlayerCapsule(layout.player.x, layout.player.y, layout.player.z);
+      const aim = layout.enemies[0] ?? layout.covers[0] ?? layout.player;
+      this.lookYaw = Math.atan2(aim.x - layout.player.x, aim.z - layout.player.z);
+      this.lookPitch = 0;
+      this.playerVelocity.set(0, 0, 0);
+      this.syncFeetFromCollider();
+      this.onMapReady?.(layout);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Ghost city failed to load';
+      this.onMapFailed?.(message);
+    }
+  }
+
+  private attachLocalPlayerModel(template: THREE.Object3D): void {
+    const model = template.clone(true);
+    model.traverse((obj) => {
+      obj.layers.set(this.localActorLayer);
+    });
+    this.playerMesh.add(model);
+  }
+
+  private placePlayerCapsule(x: number, y: number, z: number): void {
+    const radius = this.playerCollider.radius;
+    this.playerCollider.start.set(x, y + radius + 0.02, z);
+    this.playerCollider.end.set(x, y + 1.5, z);
+  }
+
+  private syncFeetFromCollider(): void {
+    const radius = this.playerCollider.radius;
+    this.playerGroup.position.set(
+      this.playerCollider.start.x,
+      this.playerCollider.start.y - radius,
+      this.playerCollider.start.z
+    );
+    this.playerGroup.rotation.y = this.lookYaw;
+  }
+
+  /** Mouse look. dx/dy are pointer-lock movement deltas in pixels. */
+  public applyLook(dx: number, dy: number): void {
+    const sensitivity = 0.0022;
+    this.lookYaw -= dx * sensitivity;
+    this.lookPitch -= dy * sensitivity;
+    const limit = Math.PI / 2 - 0.08;
+    this.lookPitch = Math.max(-limit, Math.min(limit, this.lookPitch));
+    this.playerGroup.rotation.y = this.lookYaw;
+  }
+
+  /**
+   * First-person move. forward/strafe are in look space (W = +forward, D = +strafe).
+   * Gravity and street rays keep the capsule on walkable ground.
+   */
+  public movePlayer(forward: number, strafe: number, dt: number, speed: number): void {
+    if (!this.city?.ready) return;
+
+    const sin = Math.sin(this.lookYaw);
+    const cos = Math.cos(this.lookYaw);
+    const wishX = sin * forward + cos * strafe;
+    const wishZ = cos * forward - sin * strafe;
+    const wishLen = Math.hypot(wishX, wishZ);
+    if (wishLen > 0.001) {
+      this.playerVelocity.x = (wishX / wishLen) * speed;
+      this.playerVelocity.z = (wishZ / wishLen) * speed;
+    } else {
+      this.playerVelocity.x = 0;
+      this.playerVelocity.z = 0;
+    }
+
+    this.playerVelocity.y -= 28 * dt;
+    this.city.moveCapsule(this.playerCollider, this.playerVelocity, dt);
+    this.syncFeetFromCollider();
+
+    if (this.playerGroup.position.y < -12) {
+      this.placePlayerCapsule(this.spawnPoint.x, this.spawnPoint.y, this.spawnPoint.z);
+      this.playerVelocity.set(0, 0, 0);
+      this.syncFeetFromCollider();
+    }
+  }
+
+  /** Plant an actor on the city mesh. Returns false when the spot is inside a wall. */
+  public settleActor(pos: { x: number; y?: number; z: number }, radius = 0.3): boolean {
+    if (this.city?.ready) {
+      const planted = this.city.settle(pos, radius);
+      if (!planted) return false;
+      pos.x = Math.min(mapBounds.maxX, Math.max(mapBounds.minX, pos.x));
+      pos.z = Math.min(mapBounds.maxZ, Math.max(mapBounds.minZ, pos.z));
+      return true;
+    }
+    const resolved = this.resolveEntityCollision(pos, radius, 0);
+    pos.x = resolved.x;
+    pos.z = resolved.z;
+    return true;
+  }
+
+  private makeActorModel(emissive: number): THREE.Object3D {
+    const template = this.characterTemplate;
+    if (!template) return new THREE.Group();
+    const model = template.clone(true);
+    tintActor(model, emissive);
+    const band = new THREE.Mesh(
+      new THREE.TorusGeometry(0.36, 0.03, 8, 18),
+      new THREE.MeshBasicMaterial({ color: emissive })
+    );
+    band.rotation.x = Math.PI / 2;
+    band.position.y = 1.02;
+    const wrapper = new THREE.Group();
+    wrapper.add(model);
+    wrapper.add(band);
+    return wrapper;
+  }
+
+  private updateFirstPersonCamera(): void {
+    const eye = 1.6;
+    const feet = this.playerGroup.position;
+    this.camera.position.set(feet.x + this.swayX * 0.04, feet.y + eye, feet.z + this.swayZ * 0.04);
+    const cosPitch = Math.cos(this.lookPitch);
+    const look = new THREE.Vector3(
+      Math.sin(this.lookYaw) * cosPitch,
+      Math.sin(this.lookPitch),
+      Math.cos(this.lookYaw) * cosPitch
+    );
+    this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(this.camera.position.clone().add(look));
+    this.aimPoint.copy(this.camera.position).addScaledVector(look, 48);
+    this.tacticalLight.target.position.set(0, 1.48 + Math.sin(this.lookPitch) * 6, Math.max(0.2, cosPitch) * 8);
+  }
+
+  private bodyContains(point: THREE.Vector3, feet: THREE.Vector3): boolean {
+    const dx = point.x - feet.x;
+    const dz = point.z - feet.z;
+    if (dx * dx + dz * dz > 0.45 * 0.45) return false;
+    const y = point.y - feet.y;
+    return y >= -0.05 && y <= 1.9;
   }
 
   // --- PHYSICAL OBSTACLES: EVERY COLLISION OBJECT HAS A 1:1 VISIBLE 3D MESH ---
@@ -635,6 +793,12 @@ export class ThreeTacticalWorld {
     to: { x: number; z: number },
     minCoverHeight = 0.7
   ): boolean {
+    if (this.city?.ready) {
+      const chestFrom = new THREE.Vector3(from.x, 1.25, from.z);
+      const chestTo = new THREE.Vector3(to.x, 1.25, to.z);
+      if (this.city.blocksSegment(chestFrom, chestTo, 0.4)) return false;
+    }
+
     const dx = to.x - from.x;
     const dz = to.z - from.z;
     const dist = Math.hypot(dx, dz);
@@ -729,85 +893,57 @@ export class ThreeTacticalWorld {
 
   // --- SYNC FRIENDLIES (BLUEFOR) ---
   public syncFriendlies(friendlies: FriendlyCombatant[]): void {
-    const friendlyBoxGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-    const friendlyMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      roughness: 0.25,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.5,
-    });
-
-    const barrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
-    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
-
     friendlies.forEach((friendly) => {
       let group = this.friendlyMeshes.get(friendly.id);
-      if (!group) {
+      if (!group && this.characterTemplate) {
         group = new THREE.Group();
-        const box = new THREE.Mesh(friendlyBoxGeo, friendlyMat);
-        box.castShadow = true;
-        group.add(box);
-
-        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-        barrel.position.set(0, 0.25, 0.9);
-        group.add(barrel);
-
+        group.add(this.makeActorModel(0x0284c7));
         this.scene.add(group);
         this.friendlyMeshes.set(friendly.id, group);
       }
+      if (!group) return;
 
-      group.position.set(friendly.position.x, 0.75, friendly.position.z);
+      group.position.set(friendly.position.x, friendly.position.y || 0, friendly.position.z);
       group.rotation.y = friendly.rotationY;
 
       if (friendly.status === 'KIA') {
-        group.scale.set(0.1, 0.1, 0.1);
         group.visible = false;
       } else {
-        group.scale.set(1, 1, 1);
         group.visible = true;
+        group.scale.set(1, 1, 1);
       }
     });
   }
 
-  // --- SYNC HOSTILE ENEMIES (RED SPHERES + COMMANDER CHEVRON) ---
   public syncEnemies(enemies: EnemyCombatant[]): void {
-    const enemyGeo = new THREE.SphereGeometry(1.0, 24, 24);
-    const enemyMat = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      roughness: 0.2,
-      emissive: 0xdc2626,
-      emissiveIntensity: 0.6,
-    });
-
     enemies.forEach((enemy) => {
       let group = this.enemyMeshes.get(enemy.id);
-      if (!group) {
+      if (!group && this.characterTemplate) {
         group = new THREE.Group();
-        const mesh = new THREE.Mesh(enemyGeo, enemyMat);
-        mesh.castShadow = true;
-        group.add(mesh);
+        group.add(this.makeActorModel(0xb91c1c));
 
         if (enemy.isCommander) {
-          const crownGeo = new THREE.TorusGeometry(1.0, 0.14, 12, 24);
+          const crownGeo = new THREE.TorusGeometry(0.28, 0.045, 8, 18);
           const crownMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
           const crown = new THREE.Mesh(crownGeo, crownMat);
           crown.rotation.x = Math.PI / 2;
-          crown.position.y = 1.25;
+          crown.position.y = 1.95;
           group.add(crown);
         }
 
         this.scene.add(group);
         this.enemyMeshes.set(enemy.id, group);
       }
+      if (!group) return;
 
-      group.position.set(enemy.position.x, 1.0, enemy.position.z);
+      group.position.set(enemy.position.x, enemy.position.y || 0, enemy.position.z);
+      group.rotation.y = enemy.rotationY;
 
       if (enemy.health <= 0) {
-        group.scale.set(0.1, 0.1, 0.1);
         group.visible = false;
       } else {
-        group.scale.set(1, 1, 1);
         group.visible = true;
+        group.scale.set(1, 1, 1);
       }
     });
   }
@@ -815,18 +951,16 @@ export class ThreeTacticalWorld {
   // --- PROJECTILES & FAIR WEAPON BALLISTICS ---
 
   public shootPlayerBullet(
-    targetPos: THREE.Vector3,
+    _targetPos: THREE.Vector3,
     ballistics?: { speed?: number; velocity?: number; muzzleVelocity?: number }
   ): void {
-    const origin = this.playerGroup.position.clone();
-    origin.y = 0.9;
-
-    let dir = new THREE.Vector3().subVectors(targetPos, origin);
-    dir.y = 0;
+    const dir = new THREE.Vector3();
+    this.camera.getWorldDirection(dir);
     if (dir.lengthSq() < 0.001) {
-      dir = new THREE.Vector3(Math.sin(this.playerGroup.rotation.y), 0, Math.cos(this.playerGroup.rotation.y));
+      dir.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
     }
     dir.normalize();
+    const origin = this.camera.position.clone().addScaledVector(dir, 0.35);
 
     const bGeo = new THREE.SphereGeometry(0.35, 12, 12);
     const bMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
@@ -854,10 +988,9 @@ export class ThreeTacticalWorld {
     isBluefor: boolean,
     shooterId: string
   ): void {
-    const from = new THREE.Vector3(fromPos.x, 0.9, fromPos.z);
-    const to = new THREE.Vector3(toPos.x, 0.9, toPos.z);
+    const from = new THREE.Vector3(fromPos.x, fromPos.y, fromPos.z);
+    const to = new THREE.Vector3(toPos.x, toPos.y, toPos.z);
     const dir = new THREE.Vector3().subVectors(to, from);
-    dir.y = 0;
     if (dir.lengthSq() < 0.001) return;
     dir.normalize();
 
@@ -932,8 +1065,8 @@ export class ThreeTacticalWorld {
   }
 
   public applySuppressionSway(offsetX: number, offsetZ: number): void {
-    this.barrelMesh.position.x = offsetX * 0.35;
-    this.barrelMesh.position.z = 1.0 + offsetZ * 0.15;
+    this.swayX = offsetX;
+    this.swayZ = offsetZ;
   }
 
   public render(
@@ -942,15 +1075,7 @@ export class ThreeTacticalWorld {
     onFriendlyHit: (friendlyId: string, shooterId: string, damageScale?: number) => void,
     onEnemyHit: (enemyId: string, shooterId: string, damageScale?: number) => void
   ): void {
-    // 1. Camera Follow: Rigid 1:1 camera lock to player position
-    // Eliminates camera position lag, camera orientation tilt, and aim drift while walking!
-    this.camera.position.x = this.playerGroup.position.x;
-    this.camera.position.z = this.playerGroup.position.z + 24;
-    this.camera.position.y = 32;
-    this.camera.lookAt(this.playerGroup.position.x, 0, this.playerGroup.position.z);
-
-    // 2. Re-project aim raycast through locked camera so aim direction remains completely steady!
-    this.updateAimFromMouse(this.lastMouseNorm.x, this.lastMouseNorm.y);
+    this.updateFirstPersonCamera();
 
     // 3. Update Obstacle Physics
     this.updatePhysics(dt);
@@ -968,12 +1093,12 @@ export class ThreeTacticalWorld {
 
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
-      const origin = { x: p.mesh.position.x, y: p.mesh.position.y, z: p.mesh.position.z };
+      const segmentStart = p.mesh.position.clone();
       p.mesh.position.addScaledVector(p.dir, p.speed * dt);
       p.life -= dt;
 
       const step = stepProjectileThroughCover({
-        origin,
+        origin: { x: segmentStart.x, y: segmentStart.y, z: segmentStart.z },
         next: { x: p.mesh.position.x, y: p.mesh.position.y, z: p.mesh.position.z },
         direction: { x: p.dir.x, y: p.dir.y, z: p.dir.z },
         velocity: p.velocity,
@@ -1007,11 +1132,23 @@ export class ThreeTacticalWorld {
         continue;
       }
 
+      if (this.city?.ready && this.city.blocksSegment(segmentStart, p.mesh.position, 0.05)) {
+        if (!p.isBluefor) {
+          suppressionSystem.registerWorldImpact(
+            { x: p.mesh.position.x, z: p.mesh.position.z },
+            { x: this.playerGroup.position.x, z: this.playerGroup.position.z }
+          );
+        }
+        this.scene.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        this.projectiles.splice(i, 1);
+        continue;
+      }
+
       // Check entity collisions
       if (!p.isBluefor) {
         // Hostile bullet: Can hit Player OR Friendly AI
-        const distToPlayer = p.mesh.position.distanceTo(this.playerGroup.position);
-        if (distToPlayer < 1.2) {
+        if (this.bodyContains(p.mesh.position, this.playerGroup.position)) {
           this.scene.remove(p.mesh);
           p.mesh.geometry.dispose();
           this.projectiles.splice(i, 1);
@@ -1020,7 +1157,7 @@ export class ThreeTacticalWorld {
         }
 
         for (const [fId, fGroup] of this.friendlyMeshes.entries()) {
-          if (fGroup.visible && p.mesh.position.distanceTo(fGroup.position) < 1.2) {
+          if (fGroup.visible && this.bodyContains(p.mesh.position, fGroup.position)) {
             this.scene.remove(p.mesh);
             p.mesh.geometry.dispose();
             this.projectiles.splice(i, 1);
@@ -1031,7 +1168,7 @@ export class ThreeTacticalWorld {
       } else {
         // Bluefor bullet: Hits Enemies
         for (const [eId, eGroup] of this.enemyMeshes.entries()) {
-          if (eGroup.visible && p.mesh.position.distanceTo(eGroup.position) < 1.3) {
+          if (eGroup.visible && this.bodyContains(p.mesh.position, eGroup.position)) {
             this.scene.remove(p.mesh);
             p.mesh.geometry.dispose();
             this.projectiles.splice(i, 1);
@@ -1052,6 +1189,7 @@ export class ThreeTacticalWorld {
   }
 
   public destroy(): void {
+    this.disposed = true;
     for (const cancel of this.propUpgradeCancels) cancel();
     this.propUpgradeCancels = [];
     if (this.resizeObserver) {
