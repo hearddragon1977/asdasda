@@ -11,12 +11,6 @@ export const ENEMY_MODEL_URL = '/models/enemy.glb';
 export const FRIENDLY_HITBOX = new THREE.Vector3(1.5, 1.5, 1.5);
 
 /**
- * Player placeholder was `BoxGeometry(1.6, 1.6, 1.6)` centered on the group.
- * The group sits at y = 0.9, so the volume is centered on the existing hit point.
- */
-export const PLAYER_HITBOX = new THREE.Vector3(1.6, 1.6, 1.6);
-
-/**
  * Enemy placeholder was `SphereGeometry(1)` centered on the group.
  * The group sits at y = 1, so the volume runs from the ground to y = 2.
  */

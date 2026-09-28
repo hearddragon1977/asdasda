@@ -6,7 +6,6 @@ import {
   ENEMY_MODEL_URL,
   FRIENDLY_HITBOX,
   FRIENDLY_MODEL_URL,
-  PLAYER_HITBOX,
   fitModelToHitbox,
 } from './characterModels.ts';
 
@@ -36,9 +35,7 @@ export class ThreeTacticalWorld {
   public renderer: THREE.WebGLRenderer;
 
   // Player & Visuals
-  public playerMesh: THREE.Mesh;
   public playerGroup: THREE.Group;
-  public barrelMesh: THREE.Mesh;
   public godModeRing: THREE.Mesh;
 
   // Ground & Grid
@@ -52,7 +49,6 @@ export class ThreeTacticalWorld {
   private gltfLoader = new GLTFLoader();
   private friendlyTemplate: THREE.Object3D | null = null;
   private enemyTemplate: THREE.Object3D | null = null;
-  private playerTemplate: THREE.Object3D | null = null;
   private characterLoadState: 'loading' | 'ready' | 'failed' = 'loading';
 
   // Physical Obstacles with 1:1 Visual Mesh & AABB Collision (ZERO INVISIBLE OBSTACLES)
@@ -137,33 +133,10 @@ export class ThreeTacticalWorld {
     this.gridHelper.position.y = 0.02;
     this.scene.add(this.gridHelper);
 
-    // 3. Player: Bright Green Box + Directional Aim Barrel
+    // 3. Player uses the same fitted operator model as friendlies.
+    // Group height matches syncFriendlies so the model stands on the ground.
     this.playerGroup = new THREE.Group();
-    this.playerGroup.position.set(0, 0.9, 0);
-
-    const playerGeo = new THREE.BoxGeometry(1.6, 1.6, 1.6);
-    const playerMat = new THREE.MeshStandardMaterial({
-      color: 0x22c55e,
-      roughness: 0.2,
-      emissive: 0x16a34a,
-      emissiveIntensity: 0.5,
-    });
-    this.playerMesh = new THREE.Mesh(playerGeo, playerMat);
-    this.playerMesh.castShadow = true;
-    this.playerGroup.add(this.playerMesh);
-
-    // Aim Barrel pointing in positive Z direction of local group
-    const barrelGeo = new THREE.BoxGeometry(0.35, 0.35, 1.4);
-    const barrelMat = new THREE.MeshStandardMaterial({
-      color: 0x022c22,
-      roughness: 0.4,
-      emissive: 0x15803d,
-      emissiveIntensity: 0.4,
-    });
-    this.barrelMesh = new THREE.Mesh(barrelGeo, barrelMat);
-    this.barrelMesh.position.set(0, 0.3, 1.0);
-    this.barrelMesh.castShadow = true;
-    this.playerGroup.add(this.barrelMesh);
+    this.playerGroup.position.set(0, 0.75, 0);
 
     // God Mode Shield Ring
     const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
@@ -316,7 +289,6 @@ export class ThreeTacticalWorld {
       .then(([friendly, enemy]) => {
         this.friendlyTemplate = fitModelToHitbox(friendly.scene, FRIENDLY_HITBOX);
         this.enemyTemplate = fitModelToHitbox(enemy.scene, ENEMY_HITBOX);
-        this.playerTemplate = fitModelToHitbox(friendly.scene, PLAYER_HITBOX);
         this.characterLoadState = 'ready';
         this.attachPlayerModel();
       })
@@ -340,20 +312,13 @@ export class ThreeTacticalWorld {
     group.add(character);
   }
 
-  /** Swap the green box and aim barrel for the friendly operator model. */
+  /** Same clone path as a friendly: the operator GLB fitted to the squad hitbox. */
   private attachPlayerModel(): void {
-    if (!this.playerTemplate || this.playerGroup.getObjectByName('character')) return;
+    if (!this.friendlyTemplate || this.playerGroup.getObjectByName('character')) return;
 
-    const character = this.playerTemplate.clone(true);
+    const character = this.friendlyTemplate.clone(true);
     character.name = 'character';
     this.playerGroup.add(character);
-
-    this.playerGroup.remove(this.playerMesh);
-    this.playerGroup.remove(this.barrelMesh);
-    this.playerMesh.geometry.dispose();
-    (this.playerMesh.material as THREE.Material).dispose();
-    this.barrelMesh.geometry.dispose();
-    (this.barrelMesh.material as THREE.Material).dispose();
   }
 
   // --- PHYSICS ENGINE: CRATE MOMENTUM & DAMPING ---
