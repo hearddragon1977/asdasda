@@ -538,7 +538,8 @@ export class ThreeTacticalWorld {
     dt: number,
     onPlayerHit: (shooterId: string) => void,
     onFriendlyHit: (friendlyId: string, shooterId: string) => void,
-    onEnemyHit: (enemyId: string, shooterId: string) => void
+    onEnemyHit: (enemyId: string, shooterId: string) => void,
+    onObstacleImpact?: (impactPos: { x: number; y: number; z: number }, isBluefor: boolean) => void
   ): void {
     // 1. Camera Follow: Rigid 1:1 camera lock to player position
     // Eliminates camera position lag, camera orientation tilt, and aim drift while walking!
@@ -579,6 +580,10 @@ export class ThreeTacticalWorld {
       }
 
       if (bulletAbsorbed) {
+        onObstacleImpact?.(
+          { x: p.mesh.position.x, y: p.mesh.position.y, z: p.mesh.position.z },
+          p.isBluefor
+        );
         this.scene.remove(p.mesh);
         p.mesh.geometry.dispose();
         this.projectiles.splice(i, 1);

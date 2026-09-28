@@ -4,6 +4,7 @@ import { ThreeTacticalWorld } from '../game/threeTacticalWorld';
 import { anatomySim } from '../game/anatomySimulation';
 import { aiDirector } from '../game/aiGoap';
 import { tacticalAudio } from '../audio/tacticalAudio';
+import { suppressionSystem } from '../systems/suppression.js';
 import { EnemyCombatant, FriendlyCombatant, WeaponState } from '../types/game';
 
 interface TacticalViewportProps {
@@ -62,6 +63,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   // Combat wave banner notification
   const [waveBanner, setWaveBanner] = useState<string | null>(null);
   const [combatBarkBanner, setCombatBarkBanner] = useState<{ speaker: string; text: string; isBluefor: boolean } | null>(null);
+
+  // Suppression / stress sensory feedback (blur intensity + heavy-fire flag)
+  const [suppressionBlur, setSuppressionBlur] = useState(0);
+  const [underHeavyFire, setUnderHeavyFire] = useState(false);
+  const lastSuppressionUiSync = useRef(0);
 
   const [isMobile, setIsMobile] = useState<boolean>(false);
 
@@ -176,8 +182,12 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       currentMagRounds: Math.max(0, prev.currentMagRounds - 1),
     }));
 
-    // Shoot player bullet towards mouse aim
-    world.shootPlayerBullet(world.aimPoint);
+    // Shoot player bullet towards mouse aim — suppression sway offsets the aim point
+    const fx = suppressionSystem.getEffects();
+    const swayedAim = world.aimPoint.clone();
+    swayedAim.x += fx.swayOffsetX * 10;
+    swayedAim.z += fx.swayOffsetZ * 10;
+    world.shootPlayerBullet(swayedAim);
   };
 
   useEffect(() => {
@@ -187,6 +197,8 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
     world.setGodMode(godMode);
+    suppressionSystem.reset();
+    tacticalAudio.setSuppressionMuffle(0);
 
     const initialWidth = containerRef.current.clientWidth || window.innerWidth;
     const initialHeight = containerRef.current.clientHeight || (window.innerHeight - 48);
@@ -322,6 +334,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           dt,
           (enemyShooterId) => {
             // Player hit by hostile bullet
+            suppressionSystem.registerImpact('hit');
             if (!godMode) {
               const zones = [
                 'head_carotid',
@@ -361,13 +374,60 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             if (killed) {
               onEnemyEliminated(enemyId, shooterId);
             }
+          },
+          (impactPos, isBluefor) => {
+            // Nearby cover / terrain impacts from hostile fire rattle the player
+            if (!isBluefor) {
+              suppressionSystem.registerWorldImpact(impactPos, {
+                x: world.playerGroup.position.x,
+                z: world.playerGroup.position.z,
+              });
+            }
           }
         );
+
+        // 5. Suppression: scan remaining hostile rounds for near-miss passes
+        const scanPos = world.playerGroup.position;
+        suppressionSystem.scanProjectiles(
+          { x: scanPos.x, z: scanPos.z },
+          world.projectiles.map((p) => ({
+            id: p.mesh.uuid,
+            x: p.mesh.position.x,
+            z: p.mesh.position.z,
+            isBluefor: p.isBluefor,
+            shooterId: p.shooterId,
+          })),
+          {
+            onPass: (distance) => {
+              // Close sonic crack on dangerous passes
+              if (distance < 2.2) {
+                tacticalAudio.playBulletCrack();
+              }
+            },
+          }
+        );
+
+        const suppressionFx = suppressionSystem.update(dt);
+        tacticalAudio.setSuppressionMuffle(suppressionFx.muffle);
+
+        // Light barrel wobble under suppression (visual weapon sway)
+        if (world.barrelMesh) {
+          world.barrelMesh.rotation.z = suppressionFx.swayOffsetX * 2.8;
+          world.barrelMesh.rotation.x = suppressionFx.swayOffsetZ * 2.2;
+        }
+
+        // Throttle React state for blur overlay
+        if (currentTime - lastSuppressionUiSync.current > 50) {
+          lastSuppressionUiSync.current = currentTime;
+          setSuppressionBlur(suppressionFx.blurPx);
+          setUnderHeavyFire(suppressionFx.underHeavyFire);
+        }
 
         // Render Live Mini-Radar
         renderMiniRadar(world.playerGroup.position, world.playerGroup.rotation.y);
       } else {
         world.render(0, () => {}, () => {}, () => {});
+        tacticalAudio.setSuppressionMuffle(0);
       }
 
       animFrame = requestAnimationFrame(loop);
@@ -385,6 +445,8 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       canvas.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
       canvas.removeEventListener('contextmenu', handleContextMenu);
+      suppressionSystem.reset();
+      tacticalAudio.setSuppressionMuffle(0);
       world.destroy();
     };
   }, [godMode, isPaused]);
@@ -560,11 +622,28 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       onTouchEnd={handleTouchEnd}
       onTouchCancel={handleTouchEnd}
     >
-      {/* 3D WebGL Canvas Container */}
+      {/* 3D WebGL Canvas Container — blur intensifies under suppression */}
       <div
         ref={containerRef}
         className="w-full h-full absolute inset-0 cursor-crosshair"
+        style={{
+          filter: suppressionBlur > 0.05 ? `blur(${suppressionBlur.toFixed(2)}px)` : undefined,
+          transition: 'filter 80ms linear',
+        }}
       />
+
+      {/* Suppression stress vignette / heavy-fire cue */}
+      {(suppressionBlur > 0.1 || underHeavyFire) && (
+        <div
+          className="absolute inset-0 pointer-events-none z-10 transition-opacity duration-100"
+          style={{
+            opacity: Math.min(0.85, 0.15 + suppressionBlur * 0.12 + (underHeavyFire ? 0.2 : 0)),
+            background: underHeavyFire
+              ? 'radial-gradient(circle at center, transparent 35%, rgba(15, 23, 42, 0.55) 78%, rgba(2, 6, 23, 0.92) 100%)'
+              : 'radial-gradient(circle at center, transparent 48%, rgba(15, 23, 42, 0.35) 100%)',
+          }}
+        />
+      )}
 
       {/* Top Left Quick Indicator Bar */}
       <div className="absolute top-4 left-4 z-20 flex items-center gap-3 bg-slate-950/85 backdrop-blur-md px-3.5 py-1.5 rounded border border-slate-800 text-xs font-mono text-slate-300">

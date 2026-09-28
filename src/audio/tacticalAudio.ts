@@ -7,11 +7,14 @@
 class TacticalAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  /** Low-pass inserted between master and destination for suppression muffling. */
+  private muffleFilter: BiquadFilterNode | null = null;
   private tinnitusOsc: OscillatorNode | null = null;
   private tinnitusGain: GainNode | null = null;
   private heartbeatTimer: number | null = null;
   private breathingTimer: number | null = null;
   private isInitialized = false;
+  private suppressionMuffle = 0;
 
   public init(): void {
     if (this.isInitialized && this.ctx) return;
@@ -20,11 +23,40 @@ class TacticalAudioEngine {
       this.ctx = new AudioCtx();
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
-      this.masterGain.connect(this.ctx.destination);
+
+      // Master → muffle (lowpass) → speakers. Cutoff drops under heavy fire.
+      this.muffleFilter = this.ctx.createBiquadFilter();
+      this.muffleFilter.type = 'lowpass';
+      this.muffleFilter.frequency.setValueAtTime(18000, this.ctx.currentTime);
+      this.muffleFilter.Q.setValueAtTime(0.7, this.ctx.currentTime);
+
+      this.masterGain.connect(this.muffleFilter);
+      this.muffleFilter.connect(this.ctx.destination);
       this.isInitialized = true;
     } catch {
       // AudioContext may require user interaction to unlock
     }
+  }
+
+  /**
+   * Apply combat-suppression audio muffling (0 = clear, 1 = heavy low-pass).
+   * Softens highs to simulate temporary auditory dulling under incoming fire.
+   */
+  public setSuppressionMuffle(amount: number): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.muffleFilter) return;
+
+    const clamped = Math.max(0, Math.min(1, amount));
+    this.suppressionMuffle = clamped;
+    // 18 kHz (open) → ~450 Hz (heavily muffled)
+    const hz = 18000 * Math.pow(450 / 18000, clamped);
+    const t = ctx.currentTime;
+    this.muffleFilter.frequency.cancelScheduledValues(t);
+    this.muffleFilter.frequency.setTargetAtTime(hz, t, 0.05);
+  }
+
+  public getSuppressionMuffle(): number {
+    return this.suppressionMuffle;
   }
 
   private ensureContext(): AudioContext | null {

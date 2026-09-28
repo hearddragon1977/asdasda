@@ -20,6 +20,7 @@ import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
+import { suppressionSystem } from './systems/suppression.js';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
   CasualtyReportRecord,
@@ -235,6 +236,8 @@ function TacticalAppContent() {
 
   const handleResetTrauma = () => {
     anatomySim.reset();
+    suppressionSystem.reset();
+    tacticalAudio.setSuppressionMuffle(0);
     setCasevac({
       status: 'idle',
       smokeDeployed: false,
