@@ -60,8 +60,59 @@ export interface MedicalKit {
   splints: number;
 }
 
+export type WeaponFaction = 'US' | 'Coalition' | 'OPFOR';
+export type WeaponCategory =
+  | 'carbine'
+  | 'assault_rifle'
+  | 'battle_rifle'
+  | 'dmr'
+  | 'sniper'
+  | 'lmg'
+  | 'gpmg'
+  | 'smg'
+  | 'pistol';
+export type FireMode = 'semi' | 'burst' | 'auto' | 'bolt';
+
+export interface DamageScaling {
+  baseDamage: number;
+  minDamage: number;
+  falloffStartM: number;
+  falloffEndM: number;
+  headMultiplier: number;
+  limbMultiplier: number;
+  armorPenetration: number;
+}
+
+/** Static definition from src/data/weapons.js (Afghanistan-era small arms). */
+export interface WeaponDefinition {
+  id: string;
+  name: string;
+  shortName: string;
+  faction: WeaponFaction;
+  category: WeaponCategory;
+  caliber: string;
+  cartridge: string;
+  muzzleVelocity: number;
+  effectiveRange: number;
+  maxRange: number;
+  fireRateRpm: number;
+  fireModes: FireMode[];
+  magazineSize: number;
+  defaultReserveMags: number;
+  reloadTimeSec: number;
+  emptyReloadTimeSec: number;
+  weightKg: number;
+  barrelLengthMm: number;
+  damage: DamageScaling;
+  equippable: boolean;
+  era: string;
+  description: string;
+  aliases?: string[];
+}
+
 export interface WeaponState {
-  currentMagRounds: number; // max 30
+  weaponId: string; // key into WEAPONS_BY_ID
+  currentMagRounds: number;
   chambered: boolean;
   reserveMags: number[]; // e.g. [30, 28, 15, 0]
   reserveRounds?: number; // total loose reserve rounds

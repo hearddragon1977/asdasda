@@ -28,6 +28,10 @@ import {
   subscribeToCasualtyReports,
   subscribeToUserOperators,
 } from './firebase/firestoreService';
+import {
+  DEFAULT_PLAYER_WEAPON,
+  createMagazineLoadout,
+} from './data/weapons.js';
 
 function TacticalAppContent() {
   const { user, signInWithGoogle } = useAuth();
@@ -61,18 +65,21 @@ function TacticalAppContent() {
     'OPFOR insurgents advancing through perimeter berms',
   ]);
 
-  // Weapon state (Authentic M4A1 30-round mag)
-  const [weapon, setWeapon] = useState<WeaponState>({
-    currentMagRounds: 30,
-    chambered: true,
-    reserveMags: [30, 30, 24, 18],
-    isReloading: false,
-    isInspectingMag: false,
-    magCheckInspectionText: null,
-    aimingDownSights: false,
-    tacticalLaser: true,
-    tacticalLight: false,
-    dryFired: false,
+  // Weapon state — loadout from Afghanistan-era firearms database
+  const [weapon, setWeapon] = useState<WeaponState>(() => {
+    const loadout = createMagazineLoadout(DEFAULT_PLAYER_WEAPON);
+    return {
+      weaponId: DEFAULT_PLAYER_WEAPON.id,
+      ...loadout,
+      reserveRounds: loadout.reserveMags.reduce((sum: number, n: number) => sum + n, 0),
+      isReloading: false,
+      isInspectingMag: false,
+      magCheckInspectionText: null,
+      aimingDownSights: false,
+      tacticalLaser: true,
+      tacticalLight: false,
+      dryFired: false,
+    };
   });
 
   // CASEVAC 9-Line State
@@ -201,7 +208,7 @@ function TacticalAppContent() {
       setPlayerKills((prev) => prev + 1);
       setKillFeed((prev) => [
         ...prev,
-        `${activeOperator.callsign} neutralized ${enemyName} with M4A1`,
+        `${activeOperator.callsign} neutralized ${enemyName} with ${DEFAULT_PLAYER_WEAPON.shortName}`,
       ]);
     } else {
       const friendly = aiDirector.friendlies.find((f) => f.id === shooterId);
@@ -245,14 +252,20 @@ function TacticalAppContent() {
     // Respawn Friendly AI squad with full health and full combat readiness
     aiDirector.spawnFriendlySquad({ x: 0, z: 0 });
     setFriendlies([...aiDirector.friendlies]);
-    // Replenish weapon ammunition
-    setWeapon((prev) => ({
-      ...prev,
-      isReloading: false,
-      currentMagRounds: 30,
-      reserveRounds: 120,
-      reserveMags: [30, 30, 30, 30],
-    }));
+    // Replenish weapon ammunition from equipped definition
+    setWeapon((prev) => {
+      const loadout = createMagazineLoadout(DEFAULT_PLAYER_WEAPON);
+      return {
+        ...prev,
+        weaponId: prev.weaponId || DEFAULT_PLAYER_WEAPON.id,
+        isReloading: false,
+        currentMagRounds: loadout.currentMagRounds,
+        chambered: loadout.chambered,
+        reserveMags: loadout.reserveMags.map(() => DEFAULT_PLAYER_WEAPON.magazineSize),
+        reserveRounds:
+          DEFAULT_PLAYER_WEAPON.magazineSize * DEFAULT_PLAYER_WEAPON.defaultReserveMags,
+      };
+    });
     handleVitalsChanged();
   };
 
@@ -433,7 +446,8 @@ function TacticalAppContent() {
             Tactical Trauma Simulator
           </span>
           <span className="hidden sm:inline text-xs font-mono text-emerald-400">
-            · M4A1 (800 RPM) · WAVE {currentWave}
+            · {DEFAULT_PLAYER_WEAPON.shortName} ({DEFAULT_PLAYER_WEAPON.fireRateRpm} RPM) · WAVE{' '}
+            {currentWave}
           </span>
         </div>
 
