@@ -1,10 +1,22 @@
 import * as THREE from 'three';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
+import {
+  DEFAULT_MUZZLE_VELOCITY,
+  obstaclesToColliders,
+  stepProjectileThroughCover,
+} from '../systems/ballistics.js';
+
+export type BallisticMaterial = 'wood' | 'concrete' | 'metal' | 'soil';
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
   dir: THREE.Vector3;
   speed: number;
+  /** Ballistic residual velocity (m/s) — decays through cover. */
+  velocity: number;
+  muzzleVelocity: number;
+  /** Kinetic damage scale relative to muzzle energy (0–1). */
+  damageMultiplier: number;
   life: number;
   isBluefor: boolean;
   shooterId: string;
@@ -13,7 +25,9 @@ export interface TacticalProjectile {
 export interface TacticalObstacle {
   id: string;
   mesh: THREE.Mesh;
-  type: 'crate' | 'wall' | 'perimeter';
+  type: 'crate' | 'wall' | 'perimeter' | 'berm';
+  /** Ballistic cover material used by the penetration system. */
+  material: BallisticMaterial;
   pos: { x: number; y: number; z: number };
   vel: { x: number; z: number };
   size: { x: number; y: number; z: number };
@@ -204,6 +218,7 @@ export class ThreeTacticalWorld {
         id: `crate_${idx}`,
         mesh: crateMesh,
         type: 'crate',
+        material: 'wood',
         pos: { x, y: 0.9, z },
         vel: { x: 0, z: 0 },
         size: { x: 2.2, y: 1.8, z: 2.2 },
@@ -212,20 +227,21 @@ export class ThreeTacticalWorld {
       });
     });
 
-    // 2. Concrete Blast Walls (Solid Axis-Aligned Cover)
+    // 2. Concrete Blast Walls + soil berm (Solid Axis-Aligned Cover)
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 });
+    const soilMat = new THREE.MeshStandardMaterial({ color: 0x78716c, roughness: 0.95 });
 
     const solidWalls = [
-      { x: -14, z: -24, sx: 10, sy: 1.8, sz: 1.4 },
-      { x: 14, z: -24, sx: 10, sy: 1.8, sz: 1.4 },
-      { x: 0, z: -34, sx: 16, sy: 2.0, sz: 1.4 }, // North Bunker berm
-      { x: -28, z: -10, sx: 1.4, sy: 1.8, sz: 10 }, // West berm
-      { x: 28, z: -10, sx: 1.4, sy: 1.8, sz: 10 },  // East berm
+      { x: -14, z: -24, sx: 10, sy: 1.8, sz: 1.4, material: 'concrete' as const, type: 'wall' as const },
+      { x: 14, z: -24, sx: 10, sy: 1.8, sz: 1.4, material: 'concrete' as const, type: 'wall' as const },
+      { x: 0, z: -34, sx: 16, sy: 2.0, sz: 2.4, material: 'soil' as const, type: 'berm' as const }, // North bunker berm
+      { x: -28, z: -10, sx: 1.4, sy: 1.8, sz: 10, material: 'concrete' as const, type: 'wall' as const },
+      { x: 28, z: -10, sx: 1.4, sy: 1.8, sz: 10, material: 'concrete' as const, type: 'wall' as const },
     ];
 
     solidWalls.forEach((w, idx) => {
       const geo = new THREE.BoxGeometry(w.sx, w.sy, w.sz);
-      const wallMesh = new THREE.Mesh(geo, wallMat);
+      const wallMesh = new THREE.Mesh(geo, w.material === 'soil' ? soilMat : wallMat);
       wallMesh.position.set(w.x, w.sy / 2, w.z);
       wallMesh.castShadow = true;
       wallMesh.receiveShadow = true;
@@ -234,7 +250,8 @@ export class ThreeTacticalWorld {
       this.obstacles.push({
         id: `wall_${idx}`,
         mesh: wallMesh,
-        type: 'wall',
+        type: w.type,
+        material: w.material,
         pos: { x: w.x, y: w.sy / 2, z: w.z },
         vel: { x: 0, z: 0 },
         size: { x: w.sx, y: w.sy, z: w.sz },
@@ -269,6 +286,7 @@ export class ThreeTacticalWorld {
         id: p.id,
         mesh,
         type: 'perimeter',
+        material: 'concrete',
         pos: { x: p.x, y: p.sy / 2, z: p.z },
         vel: { x: 0, z: 0 },
         size: { x: p.sx, y: p.sy, z: p.sz },
@@ -277,17 +295,29 @@ export class ThreeTacticalWorld {
       });
     });
 
-    // Corner Watchtowers for atmospheric boundary markers
+    // Corner Watchtowers — metal ballistic colliders + atmospheric markers
     const towerGeo = new THREE.CylinderGeometry(1.2, 1.4, 4.5, 8);
-    const towerMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
+    const towerMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.5 });
     const cornerPositions = [
       [-44, -44], [44, -44], [-44, 44], [44, 44]
     ];
-    cornerPositions.forEach(([x, z]) => {
+    cornerPositions.forEach(([x, z], idx) => {
       const tower = new THREE.Mesh(towerGeo, towerMat);
       tower.position.set(x, 2.25, z);
       tower.castShadow = true;
       this.scene.add(tower);
+
+      this.obstacles.push({
+        id: `tower_${idx}`,
+        mesh: tower,
+        type: 'wall',
+        material: 'metal',
+        pos: { x, y: 2.25, z },
+        vel: { x: 0, z: 0 },
+        size: { x: 2.6, y: 4.5, z: 2.6 },
+        movable: false,
+        mass: 5000,
+      });
     });
   }
 
@@ -468,6 +498,9 @@ export class ThreeTacticalWorld {
       mesh,
       dir,
       speed: 36,
+      velocity: DEFAULT_MUZZLE_VELOCITY,
+      muzzleVelocity: DEFAULT_MUZZLE_VELOCITY,
+      damageMultiplier: 1,
       life: 1.1, // Terminates after 1.1 seconds of flight
       isBluefor: true,
       shooterId: 'player',
@@ -499,6 +532,9 @@ export class ThreeTacticalWorld {
       mesh,
       dir,
       speed: 36,
+      velocity: DEFAULT_MUZZLE_VELOCITY,
+      muzzleVelocity: DEFAULT_MUZZLE_VELOCITY,
+      damageMultiplier: 1,
       life: 1.1, // Terminates after 1.1 seconds of flight
       isBluefor,
       shooterId,
@@ -536,9 +572,9 @@ export class ThreeTacticalWorld {
 
   public render(
     dt: number,
-    onPlayerHit: (shooterId: string) => void,
-    onFriendlyHit: (friendlyId: string, shooterId: string) => void,
-    onEnemyHit: (enemyId: string, shooterId: string) => void
+    onPlayerHit: (shooterId: string, damageScale: number) => void,
+    onFriendlyHit: (friendlyId: string, shooterId: string, damageScale: number) => void,
+    onEnemyHit: (enemyId: string, shooterId: string, damageScale: number) => void
   ): void {
     // 1. Camera Follow: Rigid 1:1 camera lock to player position
     // Eliminates camera position lag, camera orientation tilt, and aim drift while walking!
@@ -553,37 +589,56 @@ export class ThreeTacticalWorld {
     // 3. Update Obstacle Physics
     this.updatePhysics(dt);
 
-    // 4. Update Projectiles & Check Collision with Entities AND Obstacles
+    // 4. Update Projectiles — ballistic penetration against cover, then entity hits
+    const colliders = obstaclesToColliders(this.obstacles);
+
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
-      p.mesh.position.addScaledVector(p.dir, p.speed * dt);
+      const prev = p.mesh.position.clone();
+      // Visual flight speed scales with residual ballistic velocity
+      const flightSpeed = p.speed * Math.max(0.25, p.damageMultiplier);
+      p.mesh.position.addScaledVector(p.dir, flightSpeed * dt);
       p.life -= dt;
 
-      let bulletAbsorbed = false;
+      const stepped = stepProjectileThroughCover({
+        origin: { x: prev.x, y: prev.y, z: prev.z },
+        next: { x: p.mesh.position.x, y: p.mesh.position.y, z: p.mesh.position.z },
+        direction: { x: p.dir.x, y: p.dir.y, z: p.dir.z },
+        velocity: p.velocity,
+        damageMultiplier: p.damageMultiplier,
+        muzzleVelocity: p.muzzleVelocity,
+        colliders,
+      });
 
-      // Obstacle bullet collision (Box AABB check matching 1:1 mesh)
-      for (const obs of this.obstacles) {
-        const halfX = obs.size.x / 2 + 0.15;
-        const halfZ = obs.size.z / 2 + 0.15;
-        if (
-          Math.abs(p.mesh.position.x - obs.pos.x) < halfX &&
-          Math.abs(p.mesh.position.z - obs.pos.z) < halfZ
-        ) {
-          bulletAbsorbed = true;
-          if (obs.movable) {
-            obs.vel.x += p.dir.x * 2.8;
-            obs.vel.z += p.dir.z * 2.8;
-          }
-          break;
+      p.mesh.position.set(stepped.position.x, stepped.position.y, stepped.position.z);
+      p.dir.set(stepped.direction.x, stepped.direction.y, stepped.direction.z);
+      p.velocity = stepped.velocity;
+      p.damageMultiplier = stepped.damageMultiplier;
+
+      if (stepped.ricocheted && stepped.event) {
+        // Transfer a little momentum into movable wood crates on glance
+        const obs = this.obstacles.find((o) => o.id === stepped.event?.id);
+        if (obs?.movable) {
+          obs.vel.x += p.dir.x * 1.4;
+          obs.vel.z += p.dir.z * 1.4;
         }
       }
 
-      if (bulletAbsorbed) {
+      if (stepped.absorbed || p.damageMultiplier <= 0.02) {
+        if (stepped.event?.id) {
+          const obs = this.obstacles.find((o) => o.id === stepped.event?.id);
+          if (obs?.movable) {
+            obs.vel.x += p.dir.x * 2.8;
+            obs.vel.z += p.dir.z * 2.8;
+          }
+        }
         this.scene.remove(p.mesh);
         p.mesh.geometry.dispose();
         this.projectiles.splice(i, 1);
         continue;
       }
+
+      const damageScale = p.damageMultiplier;
 
       // Check entity collisions
       if (!p.isBluefor) {
@@ -593,30 +648,36 @@ export class ThreeTacticalWorld {
           this.scene.remove(p.mesh);
           p.mesh.geometry.dispose();
           this.projectiles.splice(i, 1);
-          onPlayerHit(p.shooterId);
+          onPlayerHit(p.shooterId, damageScale);
           continue;
         }
 
+        let hitFriendly = false;
         for (const [fId, fGroup] of this.friendlyMeshes.entries()) {
           if (fGroup.visible && p.mesh.position.distanceTo(fGroup.position) < 1.2) {
             this.scene.remove(p.mesh);
             p.mesh.geometry.dispose();
             this.projectiles.splice(i, 1);
-            onFriendlyHit(fId, p.shooterId);
+            onFriendlyHit(fId, p.shooterId, damageScale);
+            hitFriendly = true;
             break;
           }
         }
+        if (hitFriendly) continue;
       } else {
         // Bluefor bullet: Hits Enemies
+        let hitEnemy = false;
         for (const [eId, eGroup] of this.enemyMeshes.entries()) {
           if (eGroup.visible && p.mesh.position.distanceTo(eGroup.position) < 1.3) {
             this.scene.remove(p.mesh);
             p.mesh.geometry.dispose();
             this.projectiles.splice(i, 1);
-            onEnemyHit(eId, p.shooterId);
+            onEnemyHit(eId, p.shooterId, damageScale);
+            hitEnemy = true;
             break;
           }
         }
+        if (hitEnemy) continue;
       }
 
       if (p.life <= 0) {

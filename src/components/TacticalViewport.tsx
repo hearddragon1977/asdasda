@@ -320,9 +320,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         // 4. Render Frame with Precise Entity Collision Callbacks
         world.render(
           dt,
-          (enemyShooterId) => {
-            // Player hit by hostile bullet
-            if (!godMode) {
+          (enemyShooterId, damageScale) => {
+            // Player hit by hostile bullet — cover-attenuated rounds still wound
+            if (!godMode && damageScale > 0.08) {
               const zones = [
                 'head_carotid',
                 'torso_lungs',
@@ -346,17 +346,19 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
               tacticalAudio.playBulletCrack();
             }
           },
-          (friendlyId, enemyShooterId) => {
-            // Friendly AI hit by hostile bullet
-            const killed = aiDirector.hitFriendly(friendlyId, 35, enemyShooterId);
+          (friendlyId, enemyShooterId, damageScale) => {
+            // Friendly AI hit by hostile bullet (reduced through cover)
+            const damage = Math.max(4, Math.round(35 * damageScale));
+            const killed = aiDirector.hitFriendly(friendlyId, damage, enemyShooterId);
             tacticalAudio.playBulletCrack();
             if (killed) {
               onFriendlyDown(friendlyId, enemyShooterId);
             }
           },
-          (enemyId, shooterId) => {
-            // Enemy hit by Bluefor bullet
-            const killed = aiDirector.hitEnemy(enemyId, 45, shooterId);
+          (enemyId, shooterId, damageScale) => {
+            // Enemy hit by Bluefor bullet (reduced through cover)
+            const damage = Math.max(5, Math.round(45 * damageScale));
+            const killed = aiDirector.hitEnemy(enemyId, damage, shooterId);
             tacticalAudio.playEnemyAKFire();
             if (killed) {
               onEnemyEliminated(enemyId, shooterId);
