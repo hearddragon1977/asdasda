@@ -1,5 +1,6 @@
 import { EnemyCombatant, EnemyAction, FriendlyCombatant } from '../types/game';
 import { tacticalAudio } from '../audio/tacticalAudio';
+import { audioManager } from '../systems/audio';
 
 export interface CoverNode {
   id: string;
@@ -551,18 +552,23 @@ export class GuerrillaAiDirector {
 
         enemy.burstRemaining = enemy.burstRemaining || (isRPK ? 6 : isSVD ? 1 : 3);
 
-        tacticalAudio.playEnemyAKFire();
-
+        const weaponId = isRPK ? 'rpk' : isSVD ? 'svd' : 'ak47';
         const spread = isSVD ? 0.35 : isRPK ? 1.4 : 0.8;
-        const spreadX = (Math.random() - 0.5) * spread;
-        const spreadZ = (Math.random() - 0.5) * spread;
+        const muzzle = { x: enemy.position.x, y: 0.9, z: enemy.position.z };
+        const target = {
+          x: targetPos.x + (Math.random() - 0.5) * spread,
+          y: 0.9,
+          z: targetPos.z + (Math.random() - 0.5) * spread,
+        };
+        audioManager.playGunfire({
+          muzzle,
+          target,
+          listener: playerPos,
+          weapon: weaponId,
+          isPlayer: false,
+        });
 
-        onFireBullet(
-          { x: enemy.position.x, y: 0.9, z: enemy.position.z },
-          { x: targetPos.x + spreadX, y: 0.9, z: targetPos.z + spreadZ },
-          false,
-          enemy.id
-        );
+        onFireBullet(muzzle, target, false, enemy.id);
 
         enemy.burstRemaining -= 1;
         if (enemy.burstRemaining > 0) {
@@ -583,6 +589,12 @@ export class GuerrillaAiDirector {
           if (fDist > 1.2) {
             enemy.position.x += (fdx / fDist) * 5.2 * dt;
             enemy.position.z += (fdz / fDist) * 5.2 * dt;
+            audioManager.updateFootsteps(
+              enemy.id,
+              { x: enemy.position.x, y: 0, z: enemy.position.z },
+              5.2,
+              { surface: 'dirt', dt }
+            );
           } else {
             enemy.state = 'advance';
           }
@@ -596,6 +608,12 @@ export class GuerrillaAiDirector {
           if (fDist > 1.2) {
             enemy.position.x += (fdx / fDist) * 5.2 * dt;
             enemy.position.z += (fdz / fDist) * 5.2 * dt;
+            audioManager.updateFootsteps(
+              enemy.id,
+              { x: enemy.position.x, y: 0, z: enemy.position.z },
+              5.2,
+              { surface: 'dirt', dt }
+            );
           } else {
             enemy.state = 'advance';
           }
@@ -606,6 +624,12 @@ export class GuerrillaAiDirector {
           if (distToPlayer < 12) {
             enemy.position.x -= (dx / dist) * 3.5 * dt;
             enemy.position.z -= (dz / dist) * 3.5 * dt;
+            audioManager.updateFootsteps(
+              enemy.id,
+              { x: enemy.position.x, y: 0, z: enemy.position.z },
+              3.5,
+              { surface: 'dirt', dt }
+            );
           }
           break;
         }
@@ -613,6 +637,12 @@ export class GuerrillaAiDirector {
           if (distToPlayer > 14) {
             enemy.position.x += (dx / dist) * 3.8 * dt;
             enemy.position.z += (dz / dist) * 3.8 * dt;
+            audioManager.updateFootsteps(
+              enemy.id,
+              { x: enemy.position.x, y: 0, z: enemy.position.z },
+              3.8,
+              { surface: 'dirt', dt }
+            );
           }
           break;
         }
@@ -671,6 +701,12 @@ export class GuerrillaAiDirector {
       if (distToGoal > 0.4) {
         friendly.position.x += (fdx / distToGoal) * moveSpeed * dt;
         friendly.position.z += (fdz / distToGoal) * moveSpeed * dt;
+        audioManager.updateFootsteps(
+          friendly.id,
+          { x: friendly.position.x, y: 0, z: friendly.position.z },
+          moveSpeed,
+          { surface: 'concrete', dt }
+        );
       }
 
       // Aim and engage hostiles
@@ -685,18 +721,27 @@ export class GuerrillaAiDirector {
         if (friendly.shootCooldown <= 0 && minEnemyDist < 42) {
           const isSAW = friendly.role.includes('SAW');
           friendly.shootCooldown = isSAW ? 1.0 : 1.4 + Math.random() * 0.6;
-          tacticalAudio.playM4Fire();
 
           const spreadX = (Math.random() - 0.5) * 0.9;
           const spreadZ = (Math.random() - 0.5) * 0.9;
+          const muzzle = { x: friendly.position.x, y: 0.9, z: friendly.position.z };
+          const target = {
+            x: nearestEnemy.position.x + spreadX,
+            y: 0.9,
+            z: nearestEnemy.position.z + spreadZ,
+          };
+
+          audioManager.playGunfire({
+            muzzle,
+            target,
+            listener: playerPos,
+            weapon: isSAW ? 'm249' : 'm4a1',
+            isPlayer: false,
+          });
 
           onFireBullet(
-            { x: friendly.position.x, y: 0.9, z: friendly.position.z },
-            {
-              x: nearestEnemy.position.x + spreadX,
-              y: 0.9,
-              z: nearestEnemy.position.z + spreadZ,
-            },
+            muzzle,
+            target,
             true,
             friendly.id
           );

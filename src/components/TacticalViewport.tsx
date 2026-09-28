@@ -4,6 +4,7 @@ import { ThreeTacticalWorld } from '../game/threeTacticalWorld';
 import { anatomySim } from '../game/anatomySimulation';
 import { aiDirector } from '../game/aiGoap';
 import { tacticalAudio } from '../audio/tacticalAudio';
+import { audioManager } from '../systems/audio';
 import { EnemyCombatant, FriendlyCombatant, WeaponState } from '../types/game';
 
 interface TacticalViewportProps {
@@ -168,7 +169,29 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     lastShotTime.current = now;
 
     tacticalAudio.init();
-    tacticalAudio.playM4Fire();
+    audioManager.init();
+
+    const muzzle = {
+      x: world.playerGroup.position.x,
+      y: 0.9,
+      z: world.playerGroup.position.z,
+    };
+    const target = {
+      x: world.aimPoint.x,
+      y: 0.9,
+      z: world.aimPoint.z,
+    };
+    audioManager.setListenerFromPlayer(
+      muzzle.x,
+      muzzle.z,
+      world.playerGroup.rotation.y
+    );
+    audioManager.playGunfire({
+      muzzle,
+      target,
+      weapon: 'm4a1',
+      isPlayer: true,
+    });
 
     // Decrement magazine count immediately!
     onUpdateWeapon((prev) => ({
@@ -184,6 +207,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     if (!containerRef.current) return;
 
     tacticalAudio.init();
+    audioManager.init();
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
     world.setGodMode(godMode);
@@ -302,6 +326,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
         // 2. Update AI GOAP Director with Friendlies and Enemies
         const playerPos = world.playerGroup.position;
+        audioManager.setListenerFromPlayer(
+          playerPos.x,
+          playerPos.z,
+          world.playerGroup.rotation.y
+        );
         aiDirector.update(
           dt,
           { x: playerPos.x, y: playerPos.y, z: playerPos.z },
@@ -334,7 +363,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
               ] as const;
               const hitZone = zones[Math.floor(Math.random() * zones.length)];
               anatomySim.inflictTrauma(hitZone);
-              tacticalAudio.playBulletCrack();
+              audioManager.playSonicCrack(
+                { x: playerPos.x, y: 1.0, z: playerPos.z },
+                'ak47',
+                { missDistance: 0.4, intensity: 1.2 }
+              );
               onVitalsChanged();
 
               // If player flatlined, credit enemy shooter
@@ -343,13 +376,24 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
                 if (enemy) enemy.kills += 1;
               }
             } else {
-              tacticalAudio.playBulletCrack();
+              audioManager.playSonicCrack(
+                { x: playerPos.x, y: 1.0, z: playerPos.z },
+                'ak47',
+                { missDistance: 0.5, intensity: 1.0 }
+              );
             }
           },
           (friendlyId, enemyShooterId) => {
             // Friendly AI hit by hostile bullet
             const killed = aiDirector.hitFriendly(friendlyId, 35, enemyShooterId);
-            tacticalAudio.playBulletCrack();
+            const friendly = aiDirector.friendlies.find((f) => f.id === friendlyId);
+            if (friendly) {
+              audioManager.playSonicCrack(
+                { x: friendly.position.x, y: 1.0, z: friendly.position.z },
+                'ak47',
+                { missDistance: 1.2, intensity: 0.9 }
+              );
+            }
             if (killed) {
               onFriendlyDown(friendlyId, enemyShooterId);
             }
@@ -357,7 +401,14 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           (enemyId, shooterId) => {
             // Enemy hit by Bluefor bullet
             const killed = aiDirector.hitEnemy(enemyId, 45, shooterId);
-            tacticalAudio.playEnemyAKFire();
+            const enemy = aiDirector.enemies.find((e) => e.id === enemyId);
+            if (enemy) {
+              audioManager.playSonicCrack(
+                { x: enemy.position.x, y: 1.0, z: enemy.position.z },
+                'm4a1',
+                { missDistance: 1.0, intensity: 0.85 }
+              );
+            }
             if (killed) {
               onEnemyEliminated(enemyId, shooterId);
             }
@@ -491,6 +542,13 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       // Clamped cleanly within the visible perimeter concrete barrier walls (±42.5m)
       world.playerGroup.position.x = Math.max(-42.5, Math.min(42.5, nextX));
       world.playerGroup.position.z = Math.max(-42.5, Math.min(42.5, nextZ));
+
+      audioManager.updateFootsteps(
+        'player',
+        { x: world.playerGroup.position.x, y: 0, z: world.playerGroup.position.z },
+        speed,
+        { surface: 'concrete', isPlayer: true, dt }
+      );
     }
   };
 
