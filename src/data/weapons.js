@@ -1241,10 +1241,11 @@ export function getWeaponEquipSlot(weapon) {
 }
 
 /**
- * @param {string} id
+ * @param {string | null | undefined} id
  * @returns {WeaponDefinition | undefined}
  */
 export function getWeaponById(id) {
+  if (!id) return undefined;
   return WEAPONS_BY_ID[id];
 }
 

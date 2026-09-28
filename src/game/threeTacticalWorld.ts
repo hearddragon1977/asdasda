@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
+import { obstaclesToColliders, stepProjectileThroughCover } from '../systems/ballistics.js';
+import { suppressionSystem } from '../systems/suppression.js';
+import { structuralAssets } from '../systems/assetLoader';
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
@@ -8,6 +11,9 @@ export interface TacticalProjectile {
   life: number;
   isBluefor: boolean;
   shooterId: string;
+  velocity: number;
+  damageMultiplier: number;
+  muzzleVelocity: number;
 }
 
 export interface TacticalObstacle {
@@ -19,6 +25,7 @@ export interface TacticalObstacle {
   size: { x: number; y: number; z: number };
   movable: boolean;
   mass: number;
+  ballisticMaterial?: 'wood' | 'concrete' | 'metal' | 'soil';
 }
 
 /** Designated spawn pad for bluefor / opfor tactical testing. */
@@ -108,6 +115,9 @@ export class ThreeTacticalWorld {
   public playerGroup: THREE.Group;
   public barrelMesh: THREE.Mesh;
   public godModeRing: THREE.Mesh;
+  public tacticalLight: THREE.SpotLight;
+  private baseFov = 50;
+  private propUpgradeCancels: Array<() => void> = [];
 
   // Ground & Grid
   public groundMesh: THREE.Mesh;
@@ -142,7 +152,7 @@ export class ThreeTacticalWorld {
     const height = container.clientHeight > 0 ? container.clientHeight : window.innerHeight - 48;
     const aspect = width / height;
 
-    this.camera = new THREE.PerspectiveCamera(50, aspect, 0.1, 1000);
+    this.camera = new THREE.PerspectiveCamera(this.baseFov, aspect, 0.1, 1000);
     this.camera.position.set(0, 32, 24);
     this.camera.lookAt(0, 0, 0);
 
@@ -230,6 +240,13 @@ export class ThreeTacticalWorld {
     this.barrelMesh.position.set(0, 0.3, 1.0);
     this.barrelMesh.castShadow = true;
     this.playerGroup.add(this.barrelMesh);
+
+    this.tacticalLight = new THREE.SpotLight(0xfff2cc, 0, 24, (18 * Math.PI) / 180, 0.45, 1);
+    this.tacticalLight.position.set(0, 0.55, 0.4);
+    this.tacticalLight.target.position.set(0, 0.2, 10);
+    this.tacticalLight.castShadow = false;
+    this.playerGroup.add(this.tacticalLight);
+    this.playerGroup.add(this.tacticalLight.target);
 
     // God Mode Shield Ring
     const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
@@ -323,10 +340,10 @@ export class ThreeTacticalWorld {
     this.addSolidBox('bldg_se_n_e', 'wall', 26, 16, 8, 2.2, 1.2, wallMat); // bay gap at (18, 16)
 
     // Central blast berms — create a north–south kill lane with side cover
-    this.addSolidBox('berm_north', 'wall', 0, -34, 18, 2.0, 1.4, wallMat);
-    this.addSolidBox('berm_mid_w', 'wall', -12, -8, 10, 1.9, 1.3, wallMat);
-    this.addSolidBox('berm_mid_e', 'wall', 12, -8, 10, 1.9, 1.3, wallMat);
-    this.addSolidBox('berm_cross_n', 'wall', 0, -16, 8, 1.8, 1.3, wallMat);
+    this.addSolidBox('berm_north', 'wall', 0, -34, 18, 2.0, 1.4, wallMat, 1000, 'soil');
+    this.addSolidBox('berm_mid_w', 'wall', -12, -8, 10, 1.9, 1.3, wallMat, 1000, 'soil');
+    this.addSolidBox('berm_mid_e', 'wall', 12, -8, 10, 1.9, 1.3, wallMat, 1000, 'soil');
+    this.addSolidBox('berm_cross_n', 'wall', 0, -16, 8, 1.8, 1.3, wallMat, 1000, 'soil');
 
     // Flanking L-walls that break long east–west sightlines
     this.addSolidBox('flank_w_n', 'wall', -30, -6, 1.3, 1.9, 8, wallMat);
@@ -418,6 +435,7 @@ export class ThreeTacticalWorld {
         size: { x: 2.2, y: 1.8, z: 2.2 },
         movable: true,
         mass: 50,
+        ballisticMaterial: 'wood',
       });
     });
   }
@@ -496,7 +514,8 @@ export class ThreeTacticalWorld {
     sy: number,
     sz: number,
     material: THREE.Material,
-    mass = 1000
+    mass = 1000,
+    ballisticMaterial?: TacticalObstacle['ballisticMaterial']
   ): void {
     const geo = new THREE.BoxGeometry(sx, sy, sz);
     const mesh = new THREE.Mesh(geo, material);
@@ -514,6 +533,7 @@ export class ThreeTacticalWorld {
       size: { x: sx, y: sy, z: sz },
       movable: false,
       mass,
+      ballisticMaterial: ballisticMaterial ?? (type === 'crate' ? 'wood' : 'concrete'),
     });
   }
 
@@ -584,7 +604,17 @@ export class ThreeTacticalWorld {
       size: { x: aabbX, y: 0.85, z: aabbZ },
       movable: false,
       mass: 800,
+      ballisticMaterial: 'concrete',
     });
+
+    this.propUpgradeCancels.push(
+      structuralAssets.requestUpgrade('concrete_barrier', { x: aabbX, y: 0.85, z: aabbZ }, (imported) => {
+        imported.position.set(x, 0, z);
+        imported.rotation.y = rotY;
+        this.scene.add(imported);
+        group.visible = false;
+      })
+    );
   }
 
   /** Look up a spawn zone by id (used by AI director / test harnesses). */
@@ -784,7 +814,10 @@ export class ThreeTacticalWorld {
 
   // --- PROJECTILES & FAIR WEAPON BALLISTICS ---
 
-  public shootPlayerBullet(targetPos: THREE.Vector3): void {
+  public shootPlayerBullet(
+    targetPos: THREE.Vector3,
+    ballistics?: { speed?: number; velocity?: number; muzzleVelocity?: number }
+  ): void {
     const origin = this.playerGroup.position.clone();
     origin.y = 0.9;
 
@@ -801,13 +834,17 @@ export class ThreeTacticalWorld {
     mesh.position.copy(origin);
     this.scene.add(mesh);
 
+    const muzzleVelocity = ballistics?.muzzleVelocity ?? 884;
     this.projectiles.push({
       mesh,
       dir,
-      speed: 36,
+      speed: ballistics?.speed ?? 36,
       life: 1.1, // Terminates after 1.1 seconds of flight
       isBluefor: true,
       shooterId: 'player',
+      velocity: ballistics?.velocity ?? muzzleVelocity,
+      damageMultiplier: 1,
+      muzzleVelocity,
     });
   }
 
@@ -832,6 +869,7 @@ export class ThreeTacticalWorld {
     mesh.position.copy(from);
     this.scene.add(mesh);
 
+    const muzzleVelocity = isBluefor ? 884 : 715;
     this.projectiles.push({
       mesh,
       dir,
@@ -839,6 +877,9 @@ export class ThreeTacticalWorld {
       life: 1.1, // Terminates after 1.1 seconds of flight
       isBluefor,
       shooterId,
+      velocity: muzzleVelocity,
+      damageMultiplier: 1,
+      muzzleVelocity,
     });
   }
 
@@ -871,11 +912,35 @@ export class ThreeTacticalWorld {
     this.renderer.setSize(width, height);
   }
 
+  public setTacticalLight(
+    enabled: boolean,
+    opts?: { intensity?: number; distance?: number; angleDeg?: number; color?: number }
+  ): void {
+    if (!this.tacticalLight) return;
+    this.tacticalLight.intensity = enabled ? (opts?.intensity ?? 6) : 0;
+    this.tacticalLight.distance = opts?.distance ?? 24;
+    this.tacticalLight.angle = ((opts?.angleDeg ?? 18) * Math.PI) / 180;
+    if (opts?.color) this.tacticalLight.color.setHex(opts.color);
+  }
+
+  public setAdsZoom(zoom: number, aiming: boolean): void {
+    const next = this.baseFov / (aiming ? Math.max(1, zoom) : 1);
+    if (Math.abs(this.camera.fov - next) > 0.05) {
+      this.camera.fov = next;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  public applySuppressionSway(offsetX: number, offsetZ: number): void {
+    this.barrelMesh.position.x = offsetX * 0.35;
+    this.barrelMesh.position.z = 1.0 + offsetZ * 0.15;
+  }
+
   public render(
     dt: number,
-    onPlayerHit: (shooterId: string) => void,
-    onFriendlyHit: (friendlyId: string, shooterId: string) => void,
-    onEnemyHit: (enemyId: string, shooterId: string) => void
+    onPlayerHit: (shooterId: string, damageScale?: number) => void,
+    onFriendlyHit: (friendlyId: string, shooterId: string, damageScale?: number) => void,
+    onEnemyHit: (enemyId: string, shooterId: string, damageScale?: number) => void
   ): void {
     // 1. Camera Follow: Rigid 1:1 camera lock to player position
     // Eliminates camera position lag, camera orientation tilt, and aim drift while walking!
@@ -891,31 +956,51 @@ export class ThreeTacticalWorld {
     this.updatePhysics(dt);
 
     // 4. Update Projectiles & Check Collision with Entities AND Obstacles
+    const colliders = obstaclesToColliders(
+      this.obstacles.map((obs) => ({
+        id: obs.id,
+        type: obs.type,
+        material: obs.ballisticMaterial,
+        pos: obs.pos,
+        size: obs.size,
+      }))
+    );
+
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
+      const origin = { x: p.mesh.position.x, y: p.mesh.position.y, z: p.mesh.position.z };
       p.mesh.position.addScaledVector(p.dir, p.speed * dt);
       p.life -= dt;
 
-      let bulletAbsorbed = false;
+      const step = stepProjectileThroughCover({
+        origin,
+        next: { x: p.mesh.position.x, y: p.mesh.position.y, z: p.mesh.position.z },
+        direction: { x: p.dir.x, y: p.dir.y, z: p.dir.z },
+        velocity: p.velocity,
+        damageMultiplier: p.damageMultiplier,
+        muzzleVelocity: p.muzzleVelocity,
+        colliders,
+      });
 
-      // Obstacle bullet collision (Box AABB check matching 1:1 mesh)
-      for (const obs of this.obstacles) {
-        const halfX = obs.size.x / 2 + 0.15;
-        const halfZ = obs.size.z / 2 + 0.15;
-        if (
-          Math.abs(p.mesh.position.x - obs.pos.x) < halfX &&
-          Math.abs(p.mesh.position.z - obs.pos.z) < halfZ
-        ) {
-          bulletAbsorbed = true;
-          if (obs.movable) {
-            obs.vel.x += p.dir.x * 2.8;
-            obs.vel.z += p.dir.z * 2.8;
-          }
-          break;
+      p.mesh.position.set(step.position.x, step.position.y, step.position.z);
+      p.dir.set(step.direction.x, step.direction.y, step.direction.z);
+      if (p.dir.lengthSq() > 0.0001) p.dir.normalize();
+      p.velocity = step.velocity;
+      p.damageMultiplier = step.damageMultiplier;
+
+      if (step.absorbed) {
+        if (!p.isBluefor) {
+          suppressionSystem.registerWorldImpact(
+            { x: step.position.x, z: step.position.z },
+            { x: this.playerGroup.position.x, z: this.playerGroup.position.z }
+          );
         }
-      }
-
-      if (bulletAbsorbed) {
+        const hitId = step.event && 'id' in step.event ? step.event.id : null;
+        const struck = hitId ? this.obstacles.find((obs) => obs.id === hitId) : undefined;
+        if (struck?.movable) {
+          struck.vel.x += p.dir.x * 2.8;
+          struck.vel.z += p.dir.z * 2.8;
+        }
         this.scene.remove(p.mesh);
         p.mesh.geometry.dispose();
         this.projectiles.splice(i, 1);
@@ -930,7 +1015,7 @@ export class ThreeTacticalWorld {
           this.scene.remove(p.mesh);
           p.mesh.geometry.dispose();
           this.projectiles.splice(i, 1);
-          onPlayerHit(p.shooterId);
+          onPlayerHit(p.shooterId, p.damageMultiplier);
           continue;
         }
 
@@ -939,7 +1024,7 @@ export class ThreeTacticalWorld {
             this.scene.remove(p.mesh);
             p.mesh.geometry.dispose();
             this.projectiles.splice(i, 1);
-            onFriendlyHit(fId, p.shooterId);
+            onFriendlyHit(fId, p.shooterId, p.damageMultiplier);
             break;
           }
         }
@@ -950,7 +1035,7 @@ export class ThreeTacticalWorld {
             this.scene.remove(p.mesh);
             p.mesh.geometry.dispose();
             this.projectiles.splice(i, 1);
-            onEnemyHit(eId, p.shooterId);
+            onEnemyHit(eId, p.shooterId, p.damageMultiplier);
             break;
           }
         }
@@ -967,6 +1052,8 @@ export class ThreeTacticalWorld {
   }
 
   public destroy(): void {
+    for (const cancel of this.propUpgradeCancels) cancel();
+    this.propUpgradeCancels = [];
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;

@@ -1,11 +1,26 @@
 /**
  * Independent friendly operator AI.
- * Each bluefor combatant pursues role-based tactical objectives —
- * they do not tether to or follow the player.
+ * The fireteam searches, closes, and starts the fight. They do not wait
+ * on a sector or on the player. One gun keeps a lane while the rest bound in.
  */
 
-const ENGAGE_RANGE = 42;
-const MOVE = { bound: 7.2, cover: 6.4, suppress: 5.0 };
+const ENGAGE_RANGE = 52;
+const MOVE = { bound: 8.4, cover: 7.4, suppress: 6.6 };
+
+/** Enemy pads and the ground between them. The team sweeps these when contact drops. */
+const HUNT_ROUTE = [
+  { x: 0, z: 2 },
+  { x: -18, z: -10 },
+  { x: 18, z: -10 },
+  { x: 0, z: -30 },
+  { x: -28, z: -22 },
+  { x: 28, z: -22 },
+];
+
+let huntCursor = 0;
+let clearingContact = false;
+/** @type {{ x: number, z: number }} */
+let lastContact = { x: 0, z: -18 };
 
 /**
  * @typedef {{ x: number, y: number, z: number }} Vec3
@@ -39,7 +54,14 @@ const MOVE = { bound: 7.2, cover: 6.4, suppress: 5.0 };
  */
 
 /**
- * Nearest living hostile to an operator.
+ * @param {{ x: number, z: number }} a
+ * @param {{ x: number, z: number }} b
+ */
+function dist2(a, b) {
+  return Math.hypot(a.x - b.x, a.z - b.z);
+}
+
+/**
  * @param {Friendly} friendly
  * @param {Enemy[]} aliveEnemies
  */
@@ -47,7 +69,7 @@ function nearestThreat(friendly, aliveEnemies) {
   let nearest = null;
   let minDist = Infinity;
   for (const enemy of aliveEnemies) {
-    const d = Math.hypot(enemy.position.x - friendly.position.x, enemy.position.z - friendly.position.z);
+    const d = dist2(enemy.position, friendly.position);
     if (d < minDist) {
       minDist = d;
       nearest = enemy;
@@ -57,25 +79,59 @@ function nearestThreat(friendly, aliveEnemies) {
 }
 
 /**
- * Prefer HVT / commander when available for marksman roles.
+ * Shared kill: lowest health, then the commander, then whoever is nearest the team.
+ * A hostile inside 9m always wins for that operator.
  * @param {Enemy[]} aliveEnemies
- * @param {Friendly} friendly
+ * @param {Friendly[]} aliveFriendlies
  */
-function pickPriorityTarget(aliveEnemies, friendly) {
-  const isMarksman = friendly.role.includes('Marksman');
-  if (isMarksman) {
-    const hvt = aliveEnemies.find((e) => e.isCommander) ||
-      aliveEnemies.find((e) => e.role.includes('SVD') || e.role.includes('RPK'));
-    if (hvt) {
-      const d = Math.hypot(hvt.position.x - friendly.position.x, hvt.position.z - friendly.position.z);
-      return { enemy: hvt, dist: d };
+function electSquadTarget(aliveEnemies, aliveFriendlies) {
+  if (aliveEnemies.length === 0) return null;
+  let cx = 0;
+  let cz = 0;
+  for (const f of aliveFriendlies) {
+    cx += f.position.x;
+    cz += f.position.z;
+  }
+  cx /= Math.max(1, aliveFriendlies.length);
+  cz /= Math.max(1, aliveFriendlies.length);
+
+  let best = null;
+  let bestScore = -Infinity;
+  for (const enemy of aliveEnemies) {
+    const d = Math.hypot(enemy.position.x - cx, enemy.position.z - cz);
+    let score = 120 - d + (100 - enemy.health) * 0.85;
+    if (enemy.isCommander) score += 18;
+    if (enemy.role.includes('RPK') || enemy.role.includes('SVD')) score += 10;
+    if (score > bestScore) {
+      bestScore = score;
+      best = enemy;
     }
   }
-  return nearestThreat(friendly, aliveEnemies);
+  return best;
 }
 
 /**
- * Local cover query constrained to operator proximity.
+ * @param {Enemy[]} aliveEnemies
+ * @param {Friendly} friendly
+ * @param {Enemy|null} squadTarget
+ */
+function pickPriorityTarget(aliveEnemies, friendly, squadTarget) {
+  const close = nearestThreat(friendly, aliveEnemies);
+  if (close.enemy && close.dist <= 9) return close;
+
+  const isMarksman = friendly.role.includes('Marksman');
+  if (isMarksman) {
+    const hvt =
+      aliveEnemies.find((e) => e.isCommander) ||
+      aliveEnemies.find((e) => e.role.includes('SVD') || e.role.includes('RPK'));
+    if (hvt) return { enemy: hvt, dist: dist2(hvt.position, friendly.position) };
+  }
+
+  if (squadTarget) return { enemy: squadTarget, dist: dist2(squadTarget.position, friendly.position) };
+  return close;
+}
+
+/**
  * @param {CoverNode[]} coverNodes
  * @param {Vec3} entityPos
  * @param {Vec3} threatPos
@@ -88,10 +144,10 @@ export function queryBestLocalCover(coverNodes, entityPos, threatPos, maxDist = 
 
   for (const node of coverNodes) {
     if (node.occupantId && node.occupantId !== selfId) continue;
-    const distToSelf = Math.hypot(node.position.x - entityPos.x, node.position.z - entityPos.z);
+    const distToSelf = dist2(node.position, entityPos);
     if (distToSelf > maxDist) continue;
 
-    const distToThreat = Math.hypot(node.position.x - threatPos.x, node.position.z - threatPos.z);
+    const distToThreat = dist2(node.position, threatPos);
     let score = 50 - distToSelf;
     if (distToThreat > 8 && distToThreat < 28) score += 30;
     if (node.isHighGround) score += 12;
@@ -105,7 +161,43 @@ export function queryBestLocalCover(coverNodes, entityPos, threatPos, maxDist = 
 }
 
 /**
- * Role → independent tactical objective.
+ * Cover that is actually closer to the threat than the operator is.
+ * @param {CoverNode[]} coverNodes
+ * @param {Vec3} entityPos
+ * @param {Vec3} threatPos
+ * @param {string} selfId
+ */
+function queryForwardCover(coverNodes, entityPos, threatPos, selfId) {
+  const selfDist = dist2(entityPos, threatPos);
+  let bestNode = null;
+  let bestScore = 2;
+
+  for (const node of coverNodes) {
+    if (node.occupantId && node.occupantId !== selfId) continue;
+    const travel = dist2(node.position, entityPos);
+    if (travel > 18 || travel < 1.2) continue;
+    const gain = selfDist - dist2(node.position, threatPos);
+    if (gain < 2.5) continue;
+    const score = gain * 3 - travel * 0.35 + (node.isHighGround ? 5 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      bestNode = node;
+    }
+  }
+  return bestNode;
+}
+
+/**
+ * @param {Friendly} friendly
+ */
+function roleNudge(friendly) {
+  if (friendly.role.includes('SAW')) return { x: 5, z: 1 };
+  if (friendly.role.includes('Marksman')) return { x: -4, z: 6 };
+  if (friendly.role.includes('Breacher')) return { x: 4, z: -5 };
+  return { x: -5, z: 2 };
+}
+
+/**
  * @param {Friendly} friendly
  * @param {{ enemy: Enemy|null, dist: number }} threat
  * @param {Friendly[]} aliveFriendlies
@@ -114,106 +206,86 @@ function decideObjective(friendly, threat, aliveFriendlies) {
   const role = friendly.role;
   const woundedPeer = aliveFriendlies.find((f) => f.id !== friendly.id && f.status === 'WIA');
 
-  if (role.includes('Corpsman') && woundedPeer) {
+  if (role.includes('Corpsman') && woundedPeer && threat.dist > 11) {
     return { state: 'bounding', anchor: woundedPeer.position, reason: 'aid' };
   }
 
   if (!threat.enemy) {
-    // Sector security without a contact — hold independent AO
-    const sector = {
-      Corpsman: { x: -12, z: 8 },
-      SAW: { x: 10, z: 4 },
-      Marksman: { x: -8, z: 16 },
-      Breacher: { x: 14, z: 10 },
-    };
-    const key = role.includes('Corpsman')
-      ? 'Corpsman'
-      : role.includes('SAW')
-        ? 'SAW'
-        : role.includes('Marksman')
-          ? 'Marksman'
-          : 'Breacher';
-    return { state: 'take_cover', anchor: sector[key], reason: 'secure' };
+    return { state: 'bounding', anchor: null, reason: 'hunt' };
   }
 
-  if (role.includes('SAW')) {
-    return { state: 'suppress', anchor: null, reason: 'suppress' };
-  }
-  if (role.includes('Marksman')) {
-    return { state: 'take_cover', anchor: null, reason: 'overwatch' };
-  }
-  if (role.includes('Breacher') || role.includes('Flank')) {
-    return { state: 'bounding', anchor: null, reason: 'flank' };
-  }
-  // Corpsman / wingman: cover-to-cover pressure on contact
+  if (role.includes('SAW')) return { state: 'suppress', anchor: null, reason: 'suppress' };
+  if (role.includes('Marksman')) return { state: 'bounding', anchor: null, reason: 'overwatch' };
+  if (role.includes('Breacher') || role.includes('Flank')) return { state: 'bounding', anchor: null, reason: 'flank' };
   return { state: 'bounding', anchor: null, reason: 'pressure' };
 }
 
 /**
- * Compute world-space move goal for the current objective.
- * @param {Friendly} friendly
- * @param {{ state: string, anchor: Vec3|null, reason: string }} objective
- * @param {Enemy|null} threat
- * @param {CoverNode[]} coverNodes
- * @param {Friendly[]} aliveFriendlies
+ * @param {Vec3} from
+ * @param {Vec3} threat
+ * @param {number} standoff
+ * @param {number} lateral
  */
-function resolveGoal(friendly, objective, threat, coverNodes, aliveFriendlies) {
-  if (objective.anchor) {
-    return { x: objective.anchor.x, z: objective.anchor.z };
-  }
-
-  if (!threat) {
-    return { x: friendly.position.x, z: friendly.position.z };
-  }
-
-  const cover = queryBestLocalCover(
-    coverNodes,
-    friendly.position,
-    threat.position,
-    objective.reason === 'overwatch' ? 18 : 12,
-    friendly.id
-  );
-
-  if (objective.reason === 'flank') {
-    const sign = friendly.position.x >= threat.position.x ? 1 : -1;
-    const flankX = threat.position.x + sign * 12;
-    const flankZ = threat.position.z + 4;
-    if (cover) {
-      // Blend cover with flank vector so operators still use terrain
-      return {
-        x: cover.position.x * 0.35 + flankX * 0.65,
-        z: cover.position.z * 0.35 + flankZ * 0.65,
-      };
-    }
-    return { x: flankX, z: flankZ };
-  }
-
-  if (objective.reason === 'suppress' || objective.reason === 'overwatch') {
-    if (cover) return { x: cover.position.x, z: cover.position.z };
-    // Offset firing position lateral to the threat, independent of player
-    const peerBias = aliveFriendlies.reduce((acc, f) => acc + (f.id === friendly.id ? 0 : f.position.x), 0);
-    const side = peerBias >= 0 ? -1 : 1;
-    return {
-      x: threat.position.x + side * 10,
-      z: threat.position.z + (objective.reason === 'overwatch' ? 14 : 8),
-    };
-  }
-
-  if (cover) return { x: cover.position.x, z: cover.position.z };
-
-  // Pressure: close to mid engagement without stacking on the threat
-  const dx = threat.position.x - friendly.position.x;
-  const dz = threat.position.z - friendly.position.z;
+function assaultPoint(from, threat, standoff, lateral) {
+  const dx = threat.x - from.x;
+  const dz = threat.z - from.z;
   const dist = Math.hypot(dx, dz) || 1;
-  const hold = 11;
+  const px = -dz / dist;
+  const pz = dx / dist;
   return {
-    x: threat.position.x - (dx / dist) * hold,
-    z: threat.position.z - (dz / dist) * hold,
+    x: threat.x - (dx / dist) * standoff + px * lateral,
+    z: threat.z - (dz / dist) * standoff + pz * lateral,
   };
 }
 
 /**
- * Claim / release cover occupants for soft deconflict.
+ * @param {Friendly} friendly
+ * @param {{ state: string, anchor: Vec3|null, reason: string }} objective
+ * @param {Enemy|null} threat
+ * @param {CoverNode[]} coverNodes
+ * @param {boolean} blocked
+ */
+function resolveGoal(friendly, objective, threat, coverNodes, blocked) {
+  if (objective.reason === 'aid' && objective.anchor) {
+    return { x: objective.anchor.x, z: objective.anchor.z };
+  }
+
+  if (objective.reason === 'hunt' || !threat) {
+    const nudge = roleNudge(friendly);
+    const wp = clearingContact ? lastContact : HUNT_ROUTE[huntCursor % HUNT_ROUTE.length];
+    return { x: wp.x + nudge.x, z: wp.z + nudge.z };
+  }
+
+  const side = friendly.position.x >= threat.position.x ? 1 : -1;
+  let standoff = 8;
+  let lateral = side * 4;
+
+  if (objective.reason === 'suppress') {
+    standoff = 13;
+    lateral = side * (blocked ? 8 : 3);
+  } else if (objective.reason === 'overwatch') {
+    standoff = threat && dist2(friendly.position, threat.position) < 8 ? 12 : 18;
+    lateral = -side * (blocked ? 12 : 6);
+  } else if (objective.reason === 'flank') {
+    standoff = 5.5;
+    lateral = side * (blocked ? 14 : 10);
+  } else {
+    standoff = 7.5;
+    lateral = side * (blocked ? 9 : 4);
+  }
+
+  const point = assaultPoint(friendly.position, threat.position, standoff, lateral);
+  const selfDist = dist2(friendly.position, threat.position);
+
+  if (objective.reason !== 'flank' && selfDist > standoff + 6) {
+    const cover = queryForwardCover(coverNodes, friendly.position, threat.position, friendly.id);
+    if (cover) return { x: cover.position.x, z: cover.position.z };
+  }
+
+  return point;
+}
+
+/**
  * @param {CoverNode[]} coverNodes
  * @param {Friendly} friendly
  * @param {{ x: number, z: number }} goal
@@ -223,7 +295,7 @@ function updateCoverClaim(coverNodes, friendly, goal) {
     if (node.occupantId === friendly.id) node.occupantId = null;
   }
   const near = coverNodes.find(
-    (n) => Math.hypot(n.position.x - goal.x, n.position.z - goal.z) < 2.5 && (!n.occupantId || n.occupantId === friendly.id)
+    (n) => dist2(n.position, goal) < 2.5 && (!n.occupantId || n.occupantId === friendly.id)
   );
   if (near) near.occupantId = friendly.id;
 }
@@ -240,10 +312,33 @@ function moveToward(friendly, goal, dt, state) {
   const distToGoal = Math.hypot(fdx, fdz);
   if (distToGoal <= 0.45) return;
 
-  const speed =
-    state === 'bounding' ? MOVE.bound : state === 'suppress' ? MOVE.suppress : MOVE.cover;
+  const speed = state === 'bounding' ? MOVE.bound : state === 'suppress' ? MOVE.suppress : MOVE.cover;
   friendly.position.x += (fdx / distToGoal) * speed * dt;
   friendly.position.z += (fdz / distToGoal) * speed * dt;
+  friendly.position.x = Math.max(-42.5, Math.min(42.5, friendly.position.x));
+  friendly.position.z = Math.max(-42.5, Math.min(42.5, friendly.position.z));
+}
+
+/**
+ * @param {Friendly[]} alive
+ */
+function separateTeam(alive) {
+  const minDist = 3.1;
+  for (let i = 0; i < alive.length; i++) {
+    for (let j = i + 1; j < alive.length; j++) {
+      const a = alive[i].position;
+      const b = alive[j].position;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const d = Math.hypot(dx, dz);
+      if (d >= minDist || d < 0.05) continue;
+      const push = (minDist - d) * 0.4;
+      a.x -= (dx / d) * push;
+      a.z -= (dz / d) * push;
+      b.x += (dx / d) * push;
+      b.z += (dz / d) * push;
+    }
+  }
 }
 
 /**
@@ -254,22 +349,38 @@ function moveToward(friendly, goal, dt, state) {
  * @param {(from: Vec3, to: Vec3, isBluefor: boolean, shooterId: string) => void} onFireBullet
  * @param {{ playM4Fire: () => void }} audio
  * @param {(speaker: string, callsign: string, text: string, isBluefor: boolean) => void} [broadcastBark]
+ * @param {((from: {x:number, z:number}, to: {x:number, z:number}) => boolean)|undefined} hasLineOfSight
  */
-function engageTarget(friendly, enemy, dist, dt, onFireBullet, audio, broadcastBark) {
+function engageTarget(friendly, enemy, dist, dt, onFireBullet, audio, broadcastBark, hasLineOfSight) {
   friendly.targetEnemyId = enemy.id;
+  friendly.shootCooldown -= dt;
+
+  if (
+    hasLineOfSight &&
+    !hasLineOfSight(
+      { x: friendly.position.x, z: friendly.position.z },
+      { x: enemy.position.x, z: enemy.position.z }
+    )
+  ) {
+    if (friendly.shootCooldown < 0.15) friendly.shootCooldown = 0.15;
+    const edx = enemy.position.x - friendly.position.x;
+    const edz = enemy.position.z - friendly.position.z;
+    friendly.rotationY = Math.atan2(edx, edz);
+    return;
+  }
+
   const edx = enemy.position.x - friendly.position.x;
   const edz = enemy.position.z - friendly.position.z;
   friendly.rotationY = Math.atan2(edx, edz);
 
-  friendly.shootCooldown -= dt;
   if (friendly.shootCooldown > 0 || dist >= ENGAGE_RANGE) return;
 
   const isSAW = friendly.role.includes('SAW');
   const isMarksman = friendly.role.includes('Marksman');
-  friendly.shootCooldown = isSAW ? 0.95 : isMarksman ? 1.7 : 1.35 + Math.random() * 0.5;
+  friendly.shootCooldown = isSAW ? 0.48 : isMarksman ? 0.95 : 0.62 + Math.random() * 0.2;
   audio.playM4Fire();
 
-  const spread = isMarksman ? 0.45 : isSAW ? 1.1 : 0.85;
+  const spread = isMarksman ? 0.28 : isSAW ? 0.72 : 0.48;
   const spreadX = (Math.random() - 0.5) * spread;
   const spreadZ = (Math.random() - 0.5) * spread;
 
@@ -280,29 +391,29 @@ function engageTarget(friendly, enemy, dist, dt, onFireBullet, audio, broadcastB
     friendly.id
   );
 
-  if (broadcastBark && Math.random() < 0.12) {
+  if (broadcastBark && Math.random() < 0.1) {
     const barks = isSAW
       ? [
-          'Ruiz suppressing! Working my own lane!',
-          'SAW pinning hostiles — bounding on my mark!',
-          'Heavy fire on contact, independent base of fire!',
+          'Gunner moving the base of fire up!',
+          'Suppressing and closing the lane!',
+          'They are pinned — push now!',
         ]
       : isMarksman
         ? [
-            'Shadow-3 overwatch — engaging HVT.',
-            'Target acquired from overwatch nest.',
-            'Covering the sector, not stacking on you.',
+            'Shifting overwatch, taking the shot!',
+            'HVT in the open — engaging!',
+            'New angle, sending it!',
           ]
         : friendly.role.includes('Breacher')
           ? [
-              'Dustoff pushing the flank on my objective!',
-              'Breaching lateral — hostiles displacing!',
-              'Independent bound on the right!',
+              'Breacher is in on the flank!',
+              'Closing the gap, stay on them!',
+              'Point is assaulting — with me!',
             ]
           : [
-              'Doc holding left security!',
-              'Contact — treating this as my sector!',
-              'Wingman pressure, not glued to point!',
+              'Contact — we are pushing!',
+              'Moving on the hostile, do not stall!',
+              'Wingman bounding up!',
             ];
     broadcastBark(friendly.id, friendly.callsign, barks[Math.floor(Math.random() * barks.length)], true);
   }
@@ -320,31 +431,63 @@ function engageTarget(friendly, enemy, dist, dt, onFireBullet, audio, broadcastB
  *   onFireBullet: (from: Vec3, to: Vec3, isBluefor: boolean, shooterId: string) => void,
  *   audio: { playM4Fire: () => void },
  *   broadcastBark?: (speaker: string, callsign: string, text: string, isBluefor: boolean) => void,
+ *   hasLineOfSight?: (from: {x:number, z:number}, to: {x:number, z:number}) => boolean,
  * }} ctx
  */
 export function updateFriendlySquad(ctx) {
-  const { dt, friendlies, enemies, coverNodes, playerPos, onFireBullet, audio, broadcastBark } = ctx;
+  const { dt, friendlies, enemies, coverNodes, playerPos, onFireBullet, audio, broadcastBark, hasLineOfSight } = ctx;
 
   const aliveFriendlies = friendlies.filter((f) => f.status !== 'KIA');
   const aliveEnemies = enemies.filter((e) => e.health > 0);
+  const squadTarget = electSquadTarget(aliveEnemies, aliveFriendlies);
+
+  if (squadTarget) {
+    clearingContact = true;
+    lastContact = { x: squadTarget.position.x, z: squadTarget.position.z };
+  } else if (aliveFriendlies.length > 0) {
+    const lead = aliveFriendlies[0];
+    const wp = clearingContact ? lastContact : HUNT_ROUTE[huntCursor % HUNT_ROUTE.length];
+    if (dist2(lead.position, wp) < 6) {
+      if (clearingContact) clearingContact = false;
+      else huntCursor = (huntCursor + 1) % HUNT_ROUTE.length;
+    }
+  }
 
   for (const friendly of aliveFriendlies) {
-    const threat = pickPriorityTarget(aliveEnemies, friendly);
+    const threat = pickPriorityTarget(aliveEnemies, friendly, squadTarget);
+    const blocked =
+      !!threat.enemy &&
+      !!hasLineOfSight &&
+      !hasLineOfSight(
+        { x: friendly.position.x, z: friendly.position.z },
+        { x: threat.enemy.position.x, z: threat.enemy.position.z }
+      );
+
     const objective = decideObjective(friendly, threat, aliveFriendlies);
     friendly.state = /** @type {Friendly['state']} */ (objective.state);
 
-    const goal = resolveGoal(friendly, objective, threat.enemy, coverNodes, aliveFriendlies);
+    const goal = resolveGoal(friendly, objective, threat.enemy, coverNodes, blocked);
     updateCoverClaim(coverNodes, friendly, goal);
     moveToward(friendly, goal, dt, friendly.state);
 
+    const px = playerPos?.x ?? 0;
+    const pz = playerPos?.z ?? 0;
+    const awayX = friendly.position.x - px;
+    const awayZ = friendly.position.z - pz;
+    const away = Math.hypot(awayX, awayZ);
+    if (away < 4.2 && away > 0.05) {
+      friendly.position.x += (awayX / away) * (4.2 - away) * 0.28;
+      friendly.position.z += (awayZ / away) * (4.2 - away) * 0.28;
+    }
+
     if (threat.enemy) {
-      engageTarget(friendly, threat.enemy, threat.dist, dt, onFireBullet, audio, broadcastBark);
+      engageTarget(friendly, threat.enemy, threat.dist, dt, onFireBullet, audio, broadcastBark, hasLineOfSight);
     } else {
       friendly.targetEnemyId = null;
-      // Face outward from own sector, not toward the player
-      const outwardX = goal.x - (playerPos?.x ?? 0) * 0.05;
-      const outwardZ = goal.z - 4;
-      friendly.rotationY = Math.atan2(outwardX - friendly.position.x, outwardZ - friendly.position.z);
+      const face = clearingContact ? lastContact : HUNT_ROUTE[huntCursor % HUNT_ROUTE.length];
+      friendly.rotationY = Math.atan2(face.x - friendly.position.x, face.z - friendly.position.z);
     }
   }
+
+  separateTeam(aliveFriendlies);
 }

@@ -1,6 +1,11 @@
 import { EnemyCombatant, EnemyAction, FriendlyCombatant } from '../types/game';
 import { tacticalAudio } from '../audio/tacticalAudio';
 import { TACTICAL_COVER_NODES, TACTICAL_SPAWN_ZONES } from './threeTacticalWorld';
+import { updateEnemySquad } from '../ai/enemyAI.js';
+import { updateFriendlySquad } from '../ai/friendlyAI.js';
+import { audioManager } from '../systems/audio.js';
+import { equipmentManager } from '../systems/equipment.js';
+import { radioChatter } from '../systems/radioChatter';
 
 function spawnZonePos(id: string): { x: number; y: number; z: number } {
   const zone = TACTICAL_SPAWN_ZONES.find((z) => z.id === id);
@@ -52,11 +57,16 @@ export class GuerrillaAiDirector {
 
   public onWaveAnnounce?: (msg: string) => void;
   public onCombatBark?: (speaker: string, text: string, isBluefor: boolean) => void;
+  private lastStepPos = new Map<string, { x: number; z: number }>();
 
   constructor() {
     this.initCoverNodes();
     this.spawnFriendlySquad();
     this.spawnWave(1);
+    radioChatter.onTransmission = (callsign, text, isBluefor) => {
+      this.blackboard.lastBark = { speaker: callsign, text, time: performance.now() };
+      this.onCombatBark?.(callsign, text, isBluefor);
+    };
   }
 
   private initCoverNodes(): void {
@@ -67,7 +77,7 @@ export class GuerrillaAiDirector {
   }
 
   // --- FRIENDLY AI SQUAD: RESPAWN & TACTICAL FIRETEAM INITIALIZATION ---
-  public spawnFriendlySquad(playerAnchor = friendlyStagingAnchor()): void {
+  public spawnFriendlySquad(_playerAnchor = friendlyStagingAnchor()): void {
     const prevDoc = this.friendlies.find((f) => f.id === 'doc_miller');
     const prevRuiz = this.friendlies.find((f) => f.id === 'sgt_ruiz');
     const prevOrtiz = this.friendlies.find((f) => f.id === 'cpl_ortiz');
@@ -79,7 +89,7 @@ export class GuerrillaAiDirector {
         name: 'HM1 Nicholas Miller',
         callsign: 'Doc Miller',
         role: 'Corpsman / Wingman (Left Security)',
-        position: { x: playerAnchor.x - 2.8, y: 0, z: playerAnchor.z + 2.0 },
+        position: { x: -24, y: 0, z: 8 },
         rotationY: 0,
         health: 100,
         kills: prevDoc?.kills ?? 0,
@@ -87,8 +97,8 @@ export class GuerrillaAiDirector {
         status: 'ALIVE',
         shootCooldown: 1.2,
         targetEnemyId: null,
-        formationOffset: { x: -2.8, z: 2.0 },
-        state: 'follow',
+        formationOffset: { x: -24, z: 8 },
+        state: 'bounding',
         isShooting: false,
         lastBark: '',
         lastBarkTime: 0,
@@ -99,7 +109,7 @@ export class GuerrillaAiDirector {
         name: 'Sgt. Mateo Ruiz',
         callsign: 'Gunner-6',
         role: 'Automatic Rifleman (SAW Heavy Suppression)',
-        position: { x: playerAnchor.x + 3.2, y: 0, z: playerAnchor.z + 1.8 },
+        position: { x: 24, y: 0, z: 6 },
         rotationY: 0,
         health: 100,
         kills: prevRuiz?.kills ?? 0,
@@ -107,7 +117,7 @@ export class GuerrillaAiDirector {
         status: 'ALIVE',
         shootCooldown: 0.9,
         targetEnemyId: null,
-        formationOffset: { x: 3.2, z: 1.8 },
+        formationOffset: { x: 24, z: 6 },
         state: 'suppress',
         isShooting: false,
         lastBark: '',
@@ -119,7 +129,7 @@ export class GuerrillaAiDirector {
         name: 'Cpl. Raymond Ortiz',
         callsign: 'Shadow-3',
         role: 'Designated Marksman (Rear Overwatch)',
-        position: { x: playerAnchor.x - 3.8, y: 0, z: playerAnchor.z + 3.8 },
+        position: { x: -14, y: 0, z: 28 },
         rotationY: 0,
         health: 100,
         kills: prevOrtiz?.kills ?? 0,
@@ -127,7 +137,7 @@ export class GuerrillaAiDirector {
         status: 'ALIVE',
         shootCooldown: 1.5,
         targetEnemyId: null,
-        formationOffset: { x: -3.8, z: 3.8 },
+        formationOffset: { x: -14, z: 28 },
         state: 'bounding',
         isShooting: false,
         lastBark: '',
@@ -139,7 +149,7 @@ export class GuerrillaAiDirector {
         name: 'Capt. Jonathan Hayes',
         callsign: 'Dustoff-Lead',
         role: 'Tactical Breacher (Right Flank Intercept)',
-        position: { x: playerAnchor.x + 3.8, y: 0, z: playerAnchor.z + 3.8 },
+        position: { x: 12, y: 0, z: -8 },
         rotationY: 0,
         health: 100,
         kills: prevHayes?.kills ?? 0,
@@ -147,8 +157,8 @@ export class GuerrillaAiDirector {
         status: 'ALIVE',
         shootCooldown: 1.4,
         targetEnemyId: null,
-        formationOffset: { x: 3.8, z: 3.8 },
-        state: 'follow',
+        formationOffset: { x: 12, z: -8 },
+        state: 'bounding',
         isShooting: false,
         lastBark: '',
         lastBarkTime: 0,
@@ -161,7 +171,7 @@ export class GuerrillaAiDirector {
   public spawnWave(waveNum: number): void {
     this.currentWave = waveNum;
     this.waveSpawnPending = false;
-    this.commanderOrderTimer = 3.0;
+    this.commanderOrderTimer = 0.4;
 
     // Approaches map onto designated OPFOR spawn pads on the urban compound.
     const approaches = ['north_assault', 'east_flank', 'west_breach', 'pincer_ambush'] as const;
@@ -356,12 +366,12 @@ export class GuerrillaAiDirector {
   }
 
   public broadcastBark(speaker: string, callsign: string, barkText: string, isBluefor: boolean): void {
-    const now = performance.now();
-    this.blackboard.lastBark = { speaker: callsign, text: barkText, time: now };
-    tacticalAudio.playRadioSquelchChirp();
-    if (this.onCombatBark) {
-      this.onCombatBark(callsign, barkText, isBluefor);
-    }
+    radioChatter.submitLine({
+      speakerId: speaker,
+      callsign,
+      text: barkText,
+      isBluefor,
+    });
   }
 
   /**
@@ -390,6 +400,151 @@ export class GuerrillaAiDirector {
       }
     }
     return bestNode;
+  }
+
+  /**
+   * Cover that can actually see the threat, biased to one side of the compound
+   * so a guerrilla cell can split base-of-fire and assault elements.
+   */
+  private pickFightingCover(
+    selfPos: { x: number; y: number; z: number },
+    threat: { x: number; z: number },
+    hasLineOfSight: ((from: { x: number; z: number }, to: { x: number; z: number }) => boolean) | undefined,
+    options: {
+      maxTravel?: number;
+      side?: 'left' | 'right';
+      preferHigh?: boolean;
+      minStandoff?: number;
+      maxStandoff?: number;
+    } = {}
+  ): CoverNode | null {
+    const maxTravel = options.maxTravel ?? 22;
+    const minStandoff = options.minStandoff ?? 10;
+    const maxStandoff = options.maxStandoff ?? 30;
+    let best: CoverNode | null = null;
+    let bestScore = -Infinity;
+
+    for (const node of this.coverNodes) {
+      if (options.side === 'left' && node.position.x > threat.x - 4) continue;
+      if (options.side === 'right' && node.position.x < threat.x + 4) continue;
+
+      const travel = Math.hypot(node.position.x - selfPos.x, node.position.z - selfPos.z);
+      if (travel > maxTravel) continue;
+
+      const standoff = Math.hypot(node.position.x - threat.x, node.position.z - threat.z);
+      const sees =
+        !hasLineOfSight ||
+        hasLineOfSight({ x: node.position.x, z: node.position.z }, { x: threat.x, z: threat.z });
+
+      let score = sees ? 48 : 4;
+      score -= travel * 0.7;
+      if (standoff >= minStandoff && standoff <= maxStandoff) score += 26;
+      if (options.preferHigh && node.isHighGround) score += 18;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = node;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * Guerrilla fireteam: one element pins from cover, one holds, one bounds the opposite alley.
+   */
+  private assignGuerrillaPlan(
+    playerPos: { x: number; y: number; z: number },
+    hasLineOfSight?: (from: { x: number; z: number }, to: { x: number; z: number }) => boolean
+  ): void {
+    const alive = this.enemies.filter((e) => e.health > 0 && e.position);
+    if (alive.length === 0) return;
+
+    const gunner = alive.find((e) => e.role.includes('RPK')) ?? alive[0];
+    const marksman = alive.find((e) => e.role.includes('SVD') && e.id !== gunner.id);
+    const rest = alive.filter((e) => e.id !== gunner.id && e.id !== marksman?.id);
+
+    gunner.state = 'suppress';
+    const gunnerCover = this.pickFightingCover(gunner.position, playerPos, hasLineOfSight, {
+      maxTravel: 28,
+      minStandoff: 14,
+      maxStandoff: 30,
+    });
+    if (gunnerCover) gunner.targetPosition = { ...gunnerCover.position };
+
+    if (marksman) {
+      marksman.state = 'overwatch';
+      const nest = this.pickFightingCover(marksman.position, playerPos, hasLineOfSight, {
+        maxTravel: 32,
+        preferHigh: true,
+        minStandoff: 18,
+        maxStandoff: 42,
+      });
+      if (nest) marksman.targetPosition = { ...nest.position };
+    }
+
+    rest.forEach((enemy) => {
+      const side: 'left' | 'right' = enemy.position.x <= playerPos.x ? 'left' : 'right';
+      enemy.state = side === 'left' ? 'flank_left' : 'flank_right';
+      const lane = this.pickFightingCover(enemy.position, playerPos, hasLineOfSight, {
+        maxTravel: 36,
+        side,
+        minStandoff: 8,
+        maxStandoff: 22,
+      });
+      if (lane) {
+        enemy.targetPosition = { ...lane.position };
+      } else {
+        const sign = side === 'left' ? -1 : 1;
+        enemy.targetPosition = { x: playerPos.x + sign * 16, y: 0, z: playerPos.z - 6 };
+      }
+    });
+
+    if (rest.length > 1) {
+      const sorted = [...rest].sort((a, b) => {
+        const da = Math.hypot(a.position.x - playerPos.x, a.position.z - playerPos.z);
+        const db = Math.hypot(b.position.x - playerPos.x, b.position.z - playerPos.z);
+        return da - db;
+      });
+      const holder = sorted[0];
+      holder.state = 'suppress';
+      const hold = this.pickFightingCover(holder.position, playerPos, hasLineOfSight, {
+        maxTravel: 10,
+        minStandoff: 12,
+        maxStandoff: 34,
+      });
+      if (hold) holder.targetPosition = { ...hold.position };
+    }
+
+    this.blackboard.activeSuppressorId = gunner.id;
+    this.blackboard.activeFlankerId = rest.find((e) => e.state === 'flank_left' || e.state === 'flank_right')?.id ?? null;
+
+    this.broadcastBark(
+      'Sgt. Tariq',
+      'General Tariq',
+      'Gunner pins the courtyard. One man holds, the other bounds the alley. Do not stack.',
+      false
+    );
+  }
+
+  private pushApart(
+    units: { position: { x: number; z: number } }[],
+    minDist: number
+  ): void {
+    for (let i = 0; i < units.length; i++) {
+      for (let j = i + 1; j < units.length; j++) {
+        const a = units[i].position;
+        const b = units[j].position;
+        const dx = b.x - a.x;
+        const dz = b.z - a.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist >= minDist || dist < 0.05) continue;
+        const push = (minDist - dist) * 0.5;
+        a.x -= (dx / dist) * push;
+        a.z -= (dz / dist) * push;
+        b.x += (dx / dist) * push;
+        b.z += (dz / dist) * push;
+      }
+    }
   }
 
   // --- HIT DETECTION & REAL KILL ATTRIBUTION ---
@@ -466,47 +621,19 @@ export class GuerrillaAiDirector {
     return false;
   }
 
-  // --- SQUAD COMMANDER TACTICAL DIRECTIVES ---
-  private updateCommanderTactics(dt: number, playerPos: { x: number; y: number; z: number }): void {
-    const commander = this.enemies.find((e) => e.isCommander && e.health > 0);
-    if (!commander) return;
+  // --- GUERRILLA FIRETEAM ORDERS (base of fire + one bound at a time) ---
+  private updateCommanderTactics(
+    dt: number,
+    playerPos: { x: number; y: number; z: number },
+    hasLineOfSight?: (from: { x: number; z: number }, to: { x: number; z: number }) => boolean
+  ): void {
+    const alive = this.enemies.some((e) => e.health > 0);
+    if (!alive) return;
 
     this.commanderOrderTimer -= dt;
-    if (this.commanderOrderTimer <= 0) {
-      this.commanderOrderTimer = 5.5 + Math.random() * 3.0;
-
-      const orders = [
-        {
-          bark: 'Flankers, push the crates! Gunner, suppress the American leader!',
-          action: () => {
-            const fLeft = this.enemies.find((e) => e.state === 'flank_left' && e.health > 0);
-            if (fLeft) fLeft.targetPosition = { x: -28, y: 0, z: playerPos.z - 4 };
-            const gunner = this.enemies.find((e) => e.role.includes('RPK') && e.health > 0);
-            if (gunner) gunner.burstRemaining = 6;
-          },
-        },
-        {
-          bark: 'Target is in the open! Focus fire on the point man!',
-          action: () => {
-            this.enemies.forEach((e) => {
-              if (e.health > 0) e.shootCooldown = 0.2;
-            });
-          },
-        },
-        {
-          bark: 'He is ducking behind cover! Lay down heavy suppression on his position!',
-          action: () => {
-            this.enemies.forEach((e) => {
-              if (e.health > 0) e.burstRemaining = Math.max(e.burstRemaining || 0, 3);
-            });
-          },
-        },
-      ];
-
-      const selected = orders[Math.floor(Math.random() * orders.length)];
-      this.broadcastBark('Sgt. Tariq', 'General Tariq', selected.bark, false);
-      setTimeout(selected.action, 1000);
-    }
+    if (this.commanderOrderTimer > 0) return;
+    this.commanderOrderTimer = 4.0 + Math.random() * 1.6;
+    this.assignGuerrillaPlan(playerPos, hasLineOfSight);
   }
 
   // --- MAIN SIMULATION LOOP: SQUAD COHESION & BALANCED BALLISTICS ---
@@ -528,245 +655,67 @@ export class GuerrillaAiDirector {
       }
     }
 
-    this.updateCommanderTactics(dt, playerPos);
+    equipmentManager.syncCombatants(this.friendlies, this.enemies);
 
-    const aliveEnemies = this.enemies.filter((e) => e.health > 0);
-    const aliveFriendlies = this.friendlies.filter((f) => f.status !== 'KIA');
+    const fire = (
+      from: { x: number; y: number; z: number },
+      to: { x: number; y: number; z: number },
+      isBluefor: boolean,
+      shooterId: string
+    ) => {
+      audioManager.playGunfire({
+        muzzle: from,
+        target: to,
+        weapon: isBluefor ? 'm4a1' : 'ak47',
+        isPlayer: false,
+        listener: { x: playerPos.x, y: playerPos.y || 1.6, z: playerPos.z },
+      });
+      onFireBullet(from, to, isBluefor, shooterId);
+    };
 
-    // 1. ENEMY COMBATANTS: COOPERATION & INDEPENDENT FIRING
-    for (const enemy of aliveEnemies) {
-      let targetPos = playerPos;
-      const distToPlayer = Math.hypot(playerPos.x - enemy.position.x, playerPos.z - enemy.position.z);
+    const bark = (speaker: string, callsign: string, text: string, isBluefor: boolean) => {
+      this.broadcastBark(speaker, callsign, text, isBluefor);
+    };
 
-      if (distToPlayer > 18) {
-        for (const f of aliveFriendlies) {
-          const d = Math.hypot(f.position.x - enemy.position.x, f.position.z - enemy.position.z);
-          if (d < 10) {
-            targetPos = f.position;
-            break;
-          }
-        }
+    updateEnemySquad({
+      dt,
+      enemies: this.enemies,
+      friendlies: this.friendlies,
+      playerPos,
+      blackboard: this.blackboard,
+      hasLineOfSight,
+      onFireBullet: fire,
+      audio: tacticalAudio,
+      broadcastBark: bark,
+    });
+
+    updateFriendlySquad({
+      dt,
+      friendlies: this.friendlies,
+      enemies: this.enemies,
+      coverNodes: this.coverNodes,
+      playerPos,
+      hasLineOfSight,
+      onFireBullet: fire,
+      audio: tacticalAudio,
+      broadcastBark: bark,
+    });
+
+    const stepUnit = (id: string, pos: { x: number; z: number }, alive: boolean) => {
+      if (!alive) {
+        this.lastStepPos.delete(id);
+        return;
       }
+      const prev = this.lastStepPos.get(id);
+      const speed = prev && dt > 0 ? Math.hypot(pos.x - prev.x, pos.z - prev.z) / dt : 0;
+      audioManager.updateFootsteps(id, { x: pos.x, y: 0, z: pos.z }, speed, { surface: 'concrete' });
+      this.lastStepPos.set(id, { x: pos.x, z: pos.z });
+    };
+    for (const enemy of this.enemies) stepUnit(enemy.id, enemy.position, enemy.health > 0);
+    for (const friendly of this.friendlies) stepUnit(friendly.id, friendly.position, friendly.status !== 'KIA');
 
-      const dx = targetPos.x - enemy.position.x;
-      const dz = targetPos.z - enemy.position.z;
-      const dist = Math.hypot(dx, dz);
-
-      enemy.rotationY = Math.atan2(dx, dz);
-
-      // Rapid burst shooting — gated by compound LOS so walls/barriers matter
-      enemy.shootCooldown = (enemy.shootCooldown ?? 1.0) - dt;
-      if (enemy.shootCooldown <= 0 && dist < 42) {
-        const clearShot =
-          !hasLineOfSight ||
-          hasLineOfSight(
-            { x: enemy.position.x, z: enemy.position.z },
-            { x: targetPos.x, z: targetPos.z }
-          );
-        if (!clearShot) {
-          enemy.shootCooldown = 0.35;
-          // Keep advancing / flanking when blocked; don't burn ammo into walls
-        } else {
-        const isRPK = enemy.role.includes('RPK');
-        const isSVD = enemy.role.includes('SVD');
-
-        enemy.burstRemaining = enemy.burstRemaining || (isRPK ? 6 : isSVD ? 1 : 3);
-
-        tacticalAudio.playEnemyAKFire();
-
-        const spread = isSVD ? 0.35 : isRPK ? 1.4 : 0.8;
-        const spreadX = (Math.random() - 0.5) * spread;
-        const spreadZ = (Math.random() - 0.5) * spread;
-
-        onFireBullet(
-          { x: enemy.position.x, y: 0.9, z: enemy.position.z },
-          { x: targetPos.x + spreadX, y: 0.9, z: targetPos.z + spreadZ },
-          false,
-          enemy.id
-        );
-
-        enemy.burstRemaining -= 1;
-        if (enemy.burstRemaining > 0) {
-          enemy.shootCooldown = 0.1;
-        } else {
-          enemy.shootCooldown = isRPK ? 1.4 : isSVD ? 2.2 : 1.6 + Math.random() * 0.8;
-          enemy.burstRemaining = isRPK ? 6 : isSVD ? 1 : 3;
-        }
-        }
-      }
-
-      // Enemy Movement Tactics
-      switch (enemy.state) {
-        case 'flank_left': {
-          const target = enemy.targetPosition || { x: -28, y: 0, z: playerPos.z };
-          const fdx = target.x - enemy.position.x;
-          const fdz = target.z - enemy.position.z;
-          const fDist = Math.hypot(fdx, fdz);
-          if (fDist > 1.2) {
-            enemy.position.x += (fdx / fDist) * 5.2 * dt;
-            enemy.position.z += (fdz / fDist) * 5.2 * dt;
-          } else {
-            enemy.state = 'advance';
-          }
-          break;
-        }
-        case 'flank_right': {
-          const target = enemy.targetPosition || { x: 28, y: 0, z: playerPos.z };
-          const fdx = target.x - enemy.position.x;
-          const fdz = target.z - enemy.position.z;
-          const fDist = Math.hypot(fdx, fdz);
-          if (fDist > 1.2) {
-            enemy.position.x += (fdx / fDist) * 5.2 * dt;
-            enemy.position.z += (fdz / fDist) * 5.2 * dt;
-          } else {
-            enemy.state = 'advance';
-          }
-          break;
-        }
-        case 'commander':
-        case 'overwatch': {
-          if (distToPlayer < 12) {
-            enemy.position.x -= (dx / dist) * 3.5 * dt;
-            enemy.position.z -= (dz / dist) * 3.5 * dt;
-          }
-          break;
-        }
-        default: {
-          if (distToPlayer > 14) {
-            enemy.position.x += (dx / dist) * 3.8 * dt;
-            enemy.position.z += (dz / dist) * 3.8 * dt;
-          }
-          break;
-        }
-      }
-    }
-
-    // 2. BLUEFOR FRIENDLY SQUAD: SQUAD-LEAD COHESION (NEVER GO OFF ON THEIR OWN!)
-    for (const friendly of aliveFriendlies) {
-      // Find nearest hostile threat
-      let nearestEnemy: EnemyCombatant | null = null;
-      let minEnemyDist = Infinity;
-      for (const enemy of aliveEnemies) {
-        const d = Math.hypot(enemy.position.x - friendly.position.x, enemy.position.z - friendly.position.z);
-        if (d < minEnemyDist) {
-          minEnemyDist = d;
-          nearestEnemy = enemy;
-        }
-      }
-
-      // Tactical Positioning: strictly tethered to Player's formation!
-      // Base position is always anchored around player position
-      let targetX = playerPos.x + friendly.formationOffset.x;
-      let targetZ = playerPos.z + friendly.formationOffset.z;
-
-      if (friendly.role.includes('SAW') && nearestEnemy && minEnemyDist < 30) {
-        // Gunner Ruiz: Moves 3m to the player's right flank to create a crossfire angle
-        const localCover = this.queryBestLocalCover(friendly.position, nearestEnemy.position, 6.0);
-        if (localCover) {
-          targetX = THREE_LERP(targetX, localCover.position.x, 0.4);
-          targetZ = THREE_LERP(targetZ, localCover.position.z, 0.4);
-        } else {
-          targetX = playerPos.x + 3.8;
-          targetZ = playerPos.z + 1.2;
-        }
-      } else if (friendly.role.includes('Marksman') && nearestEnemy) {
-        // Marksman Ortiz: Stays 4m directly in overwatch behind the player
-        targetX = playerPos.x - 3.5;
-        targetZ = playerPos.z + 3.5;
-      } else if (friendly.role.includes('Corpsman')) {
-        // Doc Miller: Watches player's left flank within 2.5m
-        targetX = playerPos.x - 2.5;
-        targetZ = playerPos.z + 1.5;
-      } else {
-        // Dustoff-Lead: Guards right flank
-        targetX = playerPos.x + 3.5;
-        targetZ = playerPos.z + 3.0;
-      }
-
-      // Move towards formation target
-      const fdx = targetX - friendly.position.x;
-      const fdz = targetZ - friendly.position.z;
-      const distToGoal = Math.hypot(fdx, fdz);
-
-      // Fast catch-up speed so they never get separated from the player
-      const moveSpeed = distToGoal > 4.0 ? 11.0 : 8.5;
-      if (distToGoal > 0.4) {
-        friendly.position.x += (fdx / distToGoal) * moveSpeed * dt;
-        friendly.position.z += (fdz / distToGoal) * moveSpeed * dt;
-      }
-
-      // Aim and engage hostiles
-      if (nearestEnemy) {
-        friendly.targetEnemyId = nearestEnemy.id;
-
-        const edx = nearestEnemy.position.x - friendly.position.x;
-        const edz = nearestEnemy.position.z - friendly.position.z;
-        friendly.rotationY = Math.atan2(edx, edz);
-
-        friendly.shootCooldown -= dt;
-        if (friendly.shootCooldown <= 0 && minEnemyDist < 42) {
-          const clearShot =
-            !hasLineOfSight ||
-            hasLineOfSight(
-              { x: friendly.position.x, z: friendly.position.z },
-              { x: nearestEnemy.position.x, z: nearestEnemy.position.z }
-            );
-          if (!clearShot) {
-            friendly.shootCooldown = 0.4;
-          } else {
-          const isSAW = friendly.role.includes('SAW');
-          friendly.shootCooldown = isSAW ? 1.0 : 1.4 + Math.random() * 0.6;
-          tacticalAudio.playM4Fire();
-
-          const spreadX = (Math.random() - 0.5) * 0.9;
-          const spreadZ = (Math.random() - 0.5) * 0.9;
-
-          onFireBullet(
-            { x: friendly.position.x, y: 0.9, z: friendly.position.z },
-            {
-              x: nearestEnemy.position.x + spreadX,
-              y: 0.9,
-              z: nearestEnemy.position.z + spreadZ,
-            },
-            true,
-            friendly.id
-          );
-
-          // Coordinated tactical squad barks to give player the advantage
-          if (Math.random() < 0.15) {
-            const barks = isSAW
-              ? [
-                  `Ruiz laying down suppression! Push up, boss!`,
-                  `SAW pinning down hostile squad! Move on their flank!`,
-                  `Heavy fire on target! Keep your head down!`,
-                ]
-              : friendly.role.includes('Marksman')
-              ? [
-                  `Shadow-3 has overwatch. Sniping high-value targets.`,
-                  `Target in crosshairs. Engaging hostile leader!`,
-                  `Covering your advance, Viper!`,
-                ]
-              : [
-                  `Doc Miller covering your left, boss! Stay alert!`,
-                  `Hostiles bearing 340! Watch your spacing!`,
-                  `Target suppressed! Check your six!`,
-                ];
-
-            const bark = barks[Math.floor(Math.random() * barks.length)];
-            this.broadcastBark(friendly.id, friendly.callsign, bark, true);
-          }
-          }
-        }
-      } else {
-        // If no enemy nearby, aim in the direction the player is looking
-        friendly.rotationY = Math.atan2(playerPos.x - friendly.position.x, playerPos.z - friendly.position.z);
-      }
-    }
+    radioChatter.update();
   }
-}
-
-function THREE_LERP(a: number, b: number, t: number) {
-  return a + (b - a) * t;
 }
 
 export const aiDirector = new GuerrillaAiDirector();

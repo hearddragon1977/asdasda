@@ -40,6 +40,7 @@
  * @property {string | WeaponAudioProfile} [weapon]
  * @property {boolean} [isPlayer]  own-weapon near-field boost
  * @property {boolean} [supersonic] force / override sonic-crack gate
+ * @property {number} [intensity] muzzle-blast scale (suppressors below 1)
  */
 
 const SPEED_OF_SOUND_MPS = 343;
@@ -654,7 +655,7 @@ class AudioManager {
 
     this.playMuzzleBlast(options.muzzle, profile, {
       isPlayer: options.isPlayer,
-      intensity: 1,
+      intensity: options.intensity ?? 1,
     });
 
     const forceSupersonic = options.supersonic;
