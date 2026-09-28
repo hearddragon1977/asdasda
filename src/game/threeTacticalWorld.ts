@@ -1,5 +1,13 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
+import {
+  ENEMY_HITBOX,
+  ENEMY_MODEL_URL,
+  FRIENDLY_HITBOX,
+  FRIENDLY_MODEL_URL,
+  fitModelToHitbox,
+} from './characterModels.ts';
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
@@ -39,6 +47,11 @@ export class ThreeTacticalWorld {
   // Combat Entities Meshes
   public enemyMeshes: Map<string, THREE.Group> = new Map();
   public friendlyMeshes: Map<string, THREE.Group> = new Map();
+
+  private gltfLoader = new GLTFLoader();
+  private friendlyTemplate: THREE.Object3D | null = null;
+  private enemyTemplate: THREE.Object3D | null = null;
+  private characterLoadState: 'loading' | 'ready' | 'failed' = 'loading';
 
   // Physical Obstacles with 1:1 Visual Mesh & AABB Collision (ZERO INVISIBLE OBSTACLES)
   public obstacles: TacticalObstacle[] = [];
@@ -289,6 +302,38 @@ export class ThreeTacticalWorld {
       tower.castShadow = true;
       this.scene.add(tower);
     });
+
+    this.loadCharacterModels();
+  }
+
+  private loadCharacterModels(): void {
+    Promise.all([
+      this.gltfLoader.loadAsync(FRIENDLY_MODEL_URL),
+      this.gltfLoader.loadAsync(ENEMY_MODEL_URL),
+    ])
+      .then(([friendly, enemy]) => {
+        this.friendlyTemplate = fitModelToHitbox(friendly.scene, FRIENDLY_HITBOX);
+        this.enemyTemplate = fitModelToHitbox(enemy.scene, ENEMY_HITBOX);
+        this.characterLoadState = 'ready';
+      })
+      .catch((error: unknown) => {
+        this.characterLoadState = 'failed';
+        console.error('Failed to load character models from /models', error);
+      });
+  }
+
+  private attachCharacter(
+    group: THREE.Group,
+    template: THREE.Object3D | null,
+    createFallback: () => THREE.Object3D
+  ): void {
+    if (group.getObjectByName('character')) return;
+    if (this.characterLoadState === 'loading') return;
+
+    const character =
+      this.characterLoadState === 'ready' && template ? template.clone(true) : createFallback();
+    character.name = 'character';
+    group.add(character);
   }
 
   // --- PHYSICS ENGINE: CRATE MOMENTUM & DAMPING ---
@@ -360,34 +405,31 @@ export class ThreeTacticalWorld {
     return { x: rx, z: rz };
   }
 
-  // --- SYNC FRIENDLIES (BLUEFOR) ---
+  // --- SYNC FRIENDLIES (BLUEFOR CHARACTER MODELS) ---
   public syncFriendlies(friendlies: FriendlyCombatant[]): void {
-    const friendlyBoxGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-    const friendlyMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      roughness: 0.25,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.5,
-    });
-
-    const barrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
-    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
-
     friendlies.forEach((friendly) => {
       let group = this.friendlyMeshes.get(friendly.id);
       if (!group) {
         group = new THREE.Group();
-        const box = new THREE.Mesh(friendlyBoxGeo, friendlyMat);
-        box.castShadow = true;
-        group.add(box);
-
-        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
-        barrel.position.set(0, 0.25, 0.9);
-        group.add(barrel);
-
         this.scene.add(group);
         this.friendlyMeshes.set(friendly.id, group);
       }
+
+      this.attachCharacter(group, this.friendlyTemplate, () => {
+        const fallback = new THREE.Group();
+        const box = new THREE.Mesh(
+          new THREE.BoxGeometry(1.5, 1.5, 1.5),
+          new THREE.MeshStandardMaterial({
+            color: 0x38bdf8,
+            roughness: 0.25,
+            emissive: 0x0284c7,
+            emissiveIntensity: 0.5,
+          })
+        );
+        box.castShadow = true;
+        fallback.add(box);
+        return fallback;
+      });
 
       group.position.set(friendly.position.x, 0.75, friendly.position.z);
       group.rotation.y = friendly.rotationY;
@@ -402,23 +444,12 @@ export class ThreeTacticalWorld {
     });
   }
 
-  // --- SYNC HOSTILE ENEMIES (RED SPHERES + COMMANDER CHEVRON) ---
+  // --- SYNC HOSTILE ENEMIES (CHARACTER MODELS + COMMANDER CHEVRON) ---
   public syncEnemies(enemies: EnemyCombatant[]): void {
-    const enemyGeo = new THREE.SphereGeometry(1.0, 24, 24);
-    const enemyMat = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      roughness: 0.2,
-      emissive: 0xdc2626,
-      emissiveIntensity: 0.6,
-    });
-
     enemies.forEach((enemy) => {
       let group = this.enemyMeshes.get(enemy.id);
       if (!group) {
         group = new THREE.Group();
-        const mesh = new THREE.Mesh(enemyGeo, enemyMat);
-        mesh.castShadow = true;
-        group.add(mesh);
 
         if (enemy.isCommander) {
           const crownGeo = new THREE.TorusGeometry(1.0, 0.14, 12, 24);
@@ -426,6 +457,7 @@ export class ThreeTacticalWorld {
           const crown = new THREE.Mesh(crownGeo, crownMat);
           crown.rotation.x = Math.PI / 2;
           crown.position.y = 1.25;
+          crown.name = 'commander-chevron';
           group.add(crown);
         }
 
@@ -433,7 +465,24 @@ export class ThreeTacticalWorld {
         this.enemyMeshes.set(enemy.id, group);
       }
 
+      this.attachCharacter(group, this.enemyTemplate, () => {
+        const fallback = new THREE.Group();
+        const mesh = new THREE.Mesh(
+          new THREE.SphereGeometry(1.0, 24, 24),
+          new THREE.MeshStandardMaterial({
+            color: 0xef4444,
+            roughness: 0.2,
+            emissive: 0xdc2626,
+            emissiveIntensity: 0.6,
+          })
+        );
+        mesh.castShadow = true;
+        fallback.add(mesh);
+        return fallback;
+      });
+
       group.position.set(enemy.position.x, 1.0, enemy.position.z);
+      group.rotation.y = enemy.rotationY;
 
       if (enemy.health <= 0) {
         group.scale.set(0.1, 0.1, 0.1);
