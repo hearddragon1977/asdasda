@@ -63,7 +63,9 @@ export class GuerrillaAiDirector {
   }
 
   // --- FRIENDLY AI SQUAD: RESPAWN & TACTICAL FIRETEAM INITIALIZATION ---
-  public spawnFriendlySquad(playerAnchor = { x: 0, z: 0 }): void {
+  public spawnFriendlySquad(playerAnchor: { x: number; z: number } | null | undefined = { x: 0, z: 0 }): void {
+    const anchorX = playerAnchor?.x ?? 0;
+    const anchorZ = playerAnchor?.z ?? 0;
     const prevDoc = this.friendlies.find((f) => f.id === 'doc_miller');
     const prevRuiz = this.friendlies.find((f) => f.id === 'sgt_ruiz');
     const prevOrtiz = this.friendlies.find((f) => f.id === 'cpl_ortiz');
@@ -75,7 +77,7 @@ export class GuerrillaAiDirector {
         name: 'HM1 Nicholas Miller',
         callsign: 'Doc Miller',
         role: 'Corpsman / Wingman (Left Security)',
-        position: { x: playerAnchor.x - 2.8, y: 0, z: playerAnchor.z + 2.0 },
+        position: { x: anchorX - 2.8, y: 0, z: anchorZ + 2.0 },
         rotationY: 0,
         health: 100,
         kills: prevDoc?.kills ?? 0,
@@ -95,7 +97,7 @@ export class GuerrillaAiDirector {
         name: 'Sgt. Mateo Ruiz',
         callsign: 'Gunner-6',
         role: 'Automatic Rifleman (SAW Heavy Suppression)',
-        position: { x: playerAnchor.x + 3.2, y: 0, z: playerAnchor.z + 1.8 },
+        position: { x: anchorX + 3.2, y: 0, z: anchorZ + 1.8 },
         rotationY: 0,
         health: 100,
         kills: prevRuiz?.kills ?? 0,
@@ -115,7 +117,7 @@ export class GuerrillaAiDirector {
         name: 'Cpl. Raymond Ortiz',
         callsign: 'Shadow-3',
         role: 'Designated Marksman (Rear Overwatch)',
-        position: { x: playerAnchor.x - 3.8, y: 0, z: playerAnchor.z + 3.8 },
+        position: { x: anchorX - 3.8, y: 0, z: anchorZ + 3.8 },
         rotationY: 0,
         health: 100,
         kills: prevOrtiz?.kills ?? 0,
@@ -135,7 +137,7 @@ export class GuerrillaAiDirector {
         name: 'Capt. Jonathan Hayes',
         callsign: 'Dustoff-Lead',
         role: 'Tactical Breacher (Right Flank Intercept)',
-        position: { x: playerAnchor.x + 3.8, y: 0, z: playerAnchor.z + 3.8 },
+        position: { x: anchorX + 3.8, y: 0, z: anchorZ + 3.8 },
         rotationY: 0,
         health: 100,
         kills: prevHayes?.kills ?? 0,
@@ -359,10 +361,12 @@ export class GuerrillaAiDirector {
    * Only returns cover within maxDist of entity so friendlies never abandon the squad!
    */
   public queryBestLocalCover(
-    entityPos: { x: number; y: number; z: number },
-    threatPos: { x: number; y: number; z: number },
+    entityPos: { x: number; y: number; z: number } | null | undefined,
+    threatPos: { x: number; y: number; z: number } | null | undefined,
     maxDist = 9.0
   ): CoverNode | null {
+    if (!entityPos || !threatPos) return null;
+
     let bestNode: CoverNode | null = null;
     let bestScore = -Infinity;
 
@@ -502,14 +506,18 @@ export class GuerrillaAiDirector {
   // --- MAIN SIMULATION LOOP: SQUAD COHESION & BALANCED BALLISTICS ---
   public update(
     dt: number,
-    playerPos: { x: number; y: number; z: number },
-    onFireBullet: (
+    playerPos: { x: number; y: number; z: number } | null | undefined,
+    onFireBullet?: (
       from: { x: number; y: number; z: number },
       to: { x: number; y: number; z: number },
       isBluefor: boolean,
       shooterId: string
     ) => void
   ): void {
+    if (!playerPos || !Number.isFinite(playerPos.x) || !Number.isFinite(playerPos.z)) return;
+    if (typeof onFireBullet !== 'function') return;
+    if (!Number.isFinite(dt) || dt <= 0) return;
+
     if (this.waveSpawnPending) {
       this.waveSpawnTimer -= dt;
       if (this.waveSpawnTimer <= 0) {
@@ -519,8 +527,8 @@ export class GuerrillaAiDirector {
 
     this.updateCommanderTactics(dt, playerPos);
 
-    const aliveEnemies = this.enemies.filter((e) => e.health > 0);
-    const aliveFriendlies = this.friendlies.filter((f) => f.status !== 'KIA');
+    const aliveEnemies = (this.enemies ?? []).filter((e) => e?.health > 0 && e.position);
+    const aliveFriendlies = (this.friendlies ?? []).filter((f) => f && f.status !== 'KIA' && f.position);
 
     // 1. ENEMY COMBATANTS: COOPERATION & INDEPENDENT FIRING
     for (const enemy of aliveEnemies) {
@@ -540,12 +548,13 @@ export class GuerrillaAiDirector {
       const dx = targetPos.x - enemy.position.x;
       const dz = targetPos.z - enemy.position.z;
       const dist = Math.hypot(dx, dz);
-
-      enemy.rotationY = Math.atan2(dx, dz);
+      if (dist > 0.001) {
+        enemy.rotationY = Math.atan2(dx, dz);
+      }
 
       // Rapid burst shooting
       enemy.shootCooldown = (enemy.shootCooldown ?? 1.0) - dt;
-      if (enemy.shootCooldown <= 0 && dist < 42) {
+      if (enemy.shootCooldown <= 0 && dist < 42 && Number.isFinite(dist)) {
         const isRPK = enemy.role.includes('RPK');
         const isSVD = enemy.role.includes('SVD');
 
@@ -557,7 +566,7 @@ export class GuerrillaAiDirector {
         const spreadX = (Math.random() - 0.5) * spread;
         const spreadZ = (Math.random() - 0.5) * spread;
 
-        onFireBullet(
+        onFireBullet?.(
           { x: enemy.position.x, y: 0.9, z: enemy.position.z },
           { x: targetPos.x + spreadX, y: 0.9, z: targetPos.z + spreadZ },
           false,
@@ -603,14 +612,14 @@ export class GuerrillaAiDirector {
         }
         case 'commander':
         case 'overwatch': {
-          if (distToPlayer < 12) {
+          if (distToPlayer < 12 && dist > 0.05) {
             enemy.position.x -= (dx / dist) * 3.5 * dt;
             enemy.position.z -= (dz / dist) * 3.5 * dt;
           }
           break;
         }
         default: {
-          if (distToPlayer > 14) {
+          if (distToPlayer > 14 && dist > 0.05) {
             enemy.position.x += (dx / dist) * 3.8 * dt;
             enemy.position.z += (dz / dist) * 3.8 * dt;
           }
@@ -634,8 +643,10 @@ export class GuerrillaAiDirector {
 
       // Tactical Positioning: strictly tethered to Player's formation!
       // Base position is always anchored around player position
-      let targetX = playerPos.x + friendly.formationOffset.x;
-      let targetZ = playerPos.z + friendly.formationOffset.z;
+      const offsetX = friendly.formationOffset?.x ?? 0;
+      const offsetZ = friendly.formationOffset?.z ?? 0;
+      let targetX = playerPos.x + offsetX;
+      let targetZ = playerPos.z + offsetZ;
 
       if (friendly.role.includes('SAW') && nearestEnemy && minEnemyDist < 30) {
         // Gunner Ruiz: Moves 3m to the player's right flank to create a crossfire angle
@@ -681,8 +692,8 @@ export class GuerrillaAiDirector {
         const edz = nearestEnemy.position.z - friendly.position.z;
         friendly.rotationY = Math.atan2(edx, edz);
 
-        friendly.shootCooldown -= dt;
-        if (friendly.shootCooldown <= 0 && minEnemyDist < 42) {
+        friendly.shootCooldown = (friendly.shootCooldown ?? 1) - dt;
+        if (friendly.shootCooldown <= 0 && minEnemyDist < 42 && nearestEnemy.position) {
           const isSAW = friendly.role.includes('SAW');
           friendly.shootCooldown = isSAW ? 1.0 : 1.4 + Math.random() * 0.6;
           tacticalAudio.playM4Fire();
@@ -690,7 +701,7 @@ export class GuerrillaAiDirector {
           const spreadX = (Math.random() - 0.5) * 0.9;
           const spreadZ = (Math.random() - 0.5) * 0.9;
 
-          onFireBullet(
+          onFireBullet?.(
             { x: friendly.position.x, y: 0.9, z: friendly.position.z },
             {
               x: nearestEnemy.position.x + spreadX,

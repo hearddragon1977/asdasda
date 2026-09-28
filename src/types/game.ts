@@ -64,7 +64,7 @@ export interface WeaponState {
   currentMagRounds: number; // max 30
   chambered: boolean;
   reserveMags: number[]; // e.g. [30, 28, 15, 0]
-  reserveRounds?: number; // total loose reserve rounds
+  reserveRounds: number; // total loose reserve rounds
   isReloading: boolean;
   isInspectingMag: boolean;
   magCheckInspectionText: string | null;

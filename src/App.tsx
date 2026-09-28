@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { TacticalViewport } from './components/TacticalViewport';
 import { ScoreboardModal } from './components/ScoreboardModal';
 import { TopoMapModal } from './components/TopoMapModal';
@@ -61,11 +61,14 @@ function TacticalAppContent() {
     'OPFOR insurgents advancing through perimeter berms',
   ]);
 
+  const flatlineReportedRef = useRef(false);
+
   // Weapon state (Authentic M4A1 30-round mag)
   const [weapon, setWeapon] = useState<WeaponState>({
     currentMagRounds: 30,
     chambered: true,
-    reserveMags: [30, 30, 24, 18],
+    reserveMags: [30, 30, 30, 30],
+    reserveRounds: 120,
     isReloading: false,
     isInspectingMag: false,
     magCheckInspectionText: null,
@@ -162,7 +165,13 @@ function TacticalAppContent() {
     setWounds(Array.from(uniqueMap.values()));
 
     // Check flatline if not in god mode (Casualty Report triggered upon death!)
-    if (!godMode && anatomySim.vitals.shockStage === 'cardiac_arrest' && casevac.status === 'idle') {
+    if (
+      !godMode &&
+      !flatlineReportedRef.current &&
+      anatomySim.vitals.shockStage === 'cardiac_arrest' &&
+      casevac.status === 'idle'
+    ) {
+      flatlineReportedRef.current = true;
       setPlayerDeaths((prev) => prev + 1);
       setKillFeed((prev) => [...prev, `${activeOperator.callsign} expired in action (Exsanguination)`]);
 
@@ -234,6 +243,7 @@ function TacticalAppContent() {
   };
 
   const handleResetTrauma = () => {
+    flatlineReportedRef.current = false;
     anatomySim.reset();
     setCasevac({
       status: 'idle',

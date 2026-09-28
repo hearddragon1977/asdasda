@@ -53,6 +53,24 @@ export class ThreeTacticalWorld {
   public lastMouseNorm: { x: number; y: number } = { x: 0, y: 0 };
 
   private resizeObserver: ResizeObserver | null = null;
+  private enemyBodyGeo = new THREE.SphereGeometry(1.0, 24, 24);
+  private enemyBodyMat = new THREE.MeshStandardMaterial({
+    color: 0xef4444,
+    roughness: 0.2,
+    emissive: 0xdc2626,
+    emissiveIntensity: 0.6,
+  });
+  private commanderRingGeo = new THREE.TorusGeometry(1.0, 0.14, 12, 24);
+  private commanderRingMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+  private friendlyBodyGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+  private friendlyBodyMat = new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    roughness: 0.25,
+    emissive: 0x0284c7,
+    emissiveIntensity: 0.5,
+  });
+  private friendlyBarrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
+  private friendlyBarrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
 
   constructor(container: HTMLDivElement) {
     this.scene = new THREE.Scene();
@@ -361,27 +379,26 @@ export class ThreeTacticalWorld {
   }
 
   // --- SYNC FRIENDLIES (BLUEFOR) ---
-  public syncFriendlies(friendlies: FriendlyCombatant[]): void {
-    const friendlyBoxGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-    const friendlyMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      roughness: 0.25,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.5,
-    });
+  public syncFriendlies(friendlies: FriendlyCombatant[] | null | undefined): void {
+    const roster = friendlies ?? [];
+    const liveIds = new Set(roster.map((friendly) => friendly?.id).filter((id): id is string => Boolean(id)));
+    for (const [id, group] of this.friendlyMeshes) {
+      if (liveIds.has(id)) continue;
+      this.scene.remove(group);
+      this.friendlyMeshes.delete(id);
+    }
 
-    const barrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
-    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
+    roster.forEach((friendly) => {
+      if (!friendly?.id || !friendly.position) return;
 
-    friendlies.forEach((friendly) => {
       let group = this.friendlyMeshes.get(friendly.id);
       if (!group) {
         group = new THREE.Group();
-        const box = new THREE.Mesh(friendlyBoxGeo, friendlyMat);
+        const box = new THREE.Mesh(this.friendlyBodyGeo, this.friendlyBodyMat);
         box.castShadow = true;
         group.add(box);
 
-        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+        const barrel = new THREE.Mesh(this.friendlyBarrelGeo, this.friendlyBarrelMat);
         barrel.position.set(0, 0.25, 0.9);
         group.add(barrel);
 
@@ -390,7 +407,7 @@ export class ThreeTacticalWorld {
       }
 
       group.position.set(friendly.position.x, 0.75, friendly.position.z);
-      group.rotation.y = friendly.rotationY;
+      group.rotation.y = Number.isFinite(friendly.rotationY) ? friendly.rotationY : 0;
 
       if (friendly.status === 'KIA') {
         group.scale.set(0.1, 0.1, 0.1);
@@ -403,27 +420,27 @@ export class ThreeTacticalWorld {
   }
 
   // --- SYNC HOSTILE ENEMIES (RED SPHERES + COMMANDER CHEVRON) ---
-  public syncEnemies(enemies: EnemyCombatant[]): void {
-    const enemyGeo = new THREE.SphereGeometry(1.0, 24, 24);
-    const enemyMat = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      roughness: 0.2,
-      emissive: 0xdc2626,
-      emissiveIntensity: 0.6,
-    });
+  public syncEnemies(enemies: EnemyCombatant[] | null | undefined): void {
+    const roster = enemies ?? [];
+    const liveIds = new Set(roster.map((enemy) => enemy?.id).filter((id): id is string => Boolean(id)));
+    for (const [id, group] of this.enemyMeshes) {
+      if (liveIds.has(id)) continue;
+      this.scene.remove(group);
+      this.enemyMeshes.delete(id);
+    }
 
-    enemies.forEach((enemy) => {
+    roster.forEach((enemy) => {
+      if (!enemy?.id || !enemy.position) return;
+
       let group = this.enemyMeshes.get(enemy.id);
       if (!group) {
         group = new THREE.Group();
-        const mesh = new THREE.Mesh(enemyGeo, enemyMat);
+        const mesh = new THREE.Mesh(this.enemyBodyGeo, this.enemyBodyMat);
         mesh.castShadow = true;
         group.add(mesh);
 
         if (enemy.isCommander) {
-          const crownGeo = new THREE.TorusGeometry(1.0, 0.14, 12, 24);
-          const crownMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
-          const crown = new THREE.Mesh(crownGeo, crownMat);
+          const crown = new THREE.Mesh(this.commanderRingGeo, this.commanderRingMat);
           crown.rotation.x = Math.PI / 2;
           crown.position.y = 1.25;
           group.add(crown);
@@ -447,7 +464,9 @@ export class ThreeTacticalWorld {
 
   // --- PROJECTILES & FAIR WEAPON BALLISTICS ---
 
-  public shootPlayerBullet(targetPos: THREE.Vector3): void {
+  public shootPlayerBullet(targetPos: THREE.Vector3 | null | undefined): void {
+    if (!targetPos || !this.playerGroup) return;
+
     const origin = this.playerGroup.position.clone();
     origin.y = 0.9;
 
@@ -480,12 +499,17 @@ export class ThreeTacticalWorld {
     isBluefor: boolean,
     shooterId: string
   ): void {
+    if (!fromPos || !toPos || !Number.isFinite(fromPos.x) || !Number.isFinite(toPos.x)) return;
+
     const from = new THREE.Vector3(fromPos.x, 0.9, fromPos.z);
     const to = new THREE.Vector3(toPos.x, 0.9, toPos.z);
     const dir = new THREE.Vector3().subVectors(to, from);
     dir.y = 0;
-    if (dir.lengthSq() < 0.001) return;
-    dir.normalize();
+    if (dir.lengthSq() < 0.001) {
+      dir.set(0, 0, 1);
+    } else {
+      dir.normalize();
+    }
 
     const bGeo = new THREE.SphereGeometry(isBluefor ? 0.35 : 0.4, 12, 12);
     const bMat = new THREE.MeshBasicMaterial({
@@ -534,6 +558,18 @@ export class ThreeTacticalWorld {
     this.renderer.setSize(width, height);
   }
 
+  private releaseProjectile(projectile: TacticalProjectile): void {
+    if (!projectile?.mesh) return;
+    this.scene.remove(projectile.mesh);
+    projectile.mesh.geometry?.dispose();
+    const material = projectile.mesh.material;
+    if (Array.isArray(material)) {
+      material.forEach((entry) => entry.dispose());
+    } else {
+      material?.dispose();
+    }
+  }
+
   public render(
     dt: number,
     onPlayerHit: (shooterId: string) => void,
@@ -556,6 +592,10 @@ export class ThreeTacticalWorld {
     // 4. Update Projectiles & Check Collision with Entities AND Obstacles
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
+      if (!p?.mesh || !p.dir) {
+        this.projectiles.splice(i, 1);
+        continue;
+      }
       p.mesh.position.addScaledVector(p.dir, p.speed * dt);
       p.life -= dt;
 
@@ -579,49 +619,52 @@ export class ThreeTacticalWorld {
       }
 
       if (bulletAbsorbed) {
-        this.scene.remove(p.mesh);
-        p.mesh.geometry.dispose();
+        this.releaseProjectile(p);
         this.projectiles.splice(i, 1);
         continue;
       }
 
+      let consumed = false;
+
       // Check entity collisions
       if (!p.isBluefor) {
         // Hostile bullet: Can hit Player OR Friendly AI
-        const distToPlayer = p.mesh.position.distanceTo(this.playerGroup.position);
+        const distToPlayer = this.playerGroup
+          ? p.mesh.position.distanceTo(this.playerGroup.position)
+          : Infinity;
         if (distToPlayer < 1.2) {
-          this.scene.remove(p.mesh);
-          p.mesh.geometry.dispose();
+          this.releaseProjectile(p);
           this.projectiles.splice(i, 1);
-          onPlayerHit(p.shooterId);
+          onPlayerHit?.(p.shooterId);
           continue;
         }
 
         for (const [fId, fGroup] of this.friendlyMeshes.entries()) {
-          if (fGroup.visible && p.mesh.position.distanceTo(fGroup.position) < 1.2) {
-            this.scene.remove(p.mesh);
-            p.mesh.geometry.dispose();
+          if (fGroup?.visible && p.mesh.position.distanceTo(fGroup.position) < 1.2) {
+            this.releaseProjectile(p);
             this.projectiles.splice(i, 1);
-            onFriendlyHit(fId, p.shooterId);
+            onFriendlyHit?.(fId, p.shooterId);
+            consumed = true;
             break;
           }
         }
       } else {
         // Bluefor bullet: Hits Enemies
         for (const [eId, eGroup] of this.enemyMeshes.entries()) {
-          if (eGroup.visible && p.mesh.position.distanceTo(eGroup.position) < 1.3) {
-            this.scene.remove(p.mesh);
-            p.mesh.geometry.dispose();
+          if (eGroup?.visible && p.mesh.position.distanceTo(eGroup.position) < 1.3) {
+            this.releaseProjectile(p);
             this.projectiles.splice(i, 1);
-            onEnemyHit(eId, p.shooterId);
+            onEnemyHit?.(eId, p.shooterId);
+            consumed = true;
             break;
           }
         }
       }
 
+      if (consumed) continue;
+
       if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        p.mesh.geometry.dispose();
+        this.releaseProjectile(p);
         this.projectiles.splice(i, 1);
       }
     }
@@ -635,6 +678,16 @@ export class ThreeTacticalWorld {
       this.resizeObserver = null;
     }
     this.renderer.dispose();
+    const canvas = this.renderer.domElement;
+    canvas.parentElement?.removeChild(canvas);
     this.scene.clear();
+    this.enemyBodyGeo.dispose();
+    this.enemyBodyMat.dispose();
+    this.commanderRingGeo.dispose();
+    this.commanderRingMat.dispose();
+    this.friendlyBodyGeo.dispose();
+    this.friendlyBodyMat.dispose();
+    this.friendlyBarrelGeo.dispose();
+    this.friendlyBarrelMat.dispose();
   }
 }

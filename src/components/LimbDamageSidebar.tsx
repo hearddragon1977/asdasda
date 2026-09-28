@@ -1,5 +1,5 @@
 import React from 'react';
-import { AnatomicalWound, MedicalKit, PlayerVitals } from '../types/game';
+import { AnatomicalWound, AnatomicalZone, MedicalKit, PlayerVitals } from '../types/game';
 import { anatomySim } from '../game/anatomySimulation';
 
 interface LimbDamageSidebarProps {
@@ -69,7 +69,7 @@ export const LimbDamageSidebar: React.FC<LimbDamageSidebarProps> = ({
     }
   };
 
-  const handleInjectDamage = (zone: any) => {
+  const handleInjectDamage = (zone: AnatomicalZone) => {
     if (godMode) return;
     anatomySim.inflictTrauma(zone);
     onRefreshVitals();

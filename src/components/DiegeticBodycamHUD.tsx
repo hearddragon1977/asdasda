@@ -109,11 +109,14 @@ export const DiegeticBodycamHUD: React.FC<DiegeticBodycamHUDProps> = ({
             </div>
 
             <div className="relative mt-3 aspect-[4/3] bg-stone-950 border border-stone-800 overflow-hidden flex items-center justify-center">
-              <img
-                src="/src/assets/images/tactical_topo_map_1790567901436.jpg"
-                alt="Tactical Topographic Map"
-                className="w-full h-full object-cover opacity-90 contrast-125"
-                referrerPolicy="no-referrer"
+              <div
+                className="w-full h-full opacity-90"
+                style={{
+                  backgroundColor: '#1c1917',
+                  backgroundImage:
+                    'linear-gradient(rgba(120, 113, 108, 0.35) 1px, transparent 1px), linear-gradient(90deg, rgba(120, 113, 108, 0.35) 1px, transparent 1px)',
+                  backgroundSize: '40px 40px',
+                }}
               />
               {/* Tactical overlay markers */}
               <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-1.5 bg-black/75 px-2.5 py-1 border border-amber-500 text-[11px] font-mono text-amber-400">
