@@ -1,4 +1,4 @@
-import { EnemyCombatant, EnemyAction, FriendlyCombatant } from '../types/game';
+import { EnemyCombatant, FriendlyCombatant } from '../types/game';
 import { tacticalAudio } from '../audio/tacticalAudio';
 import { tacticalLayout } from '../systems/mapGenerator';
 import { radioChatter, type RadioCallout } from '../systems/radioChatter';
@@ -19,6 +19,10 @@ export interface SquadBlackboard {
   timeSincePlayerSpotted: number;
 }
 
+/**
+ * World / wave director. Combat cognition lives in src/ai/{enemy,friendly}AI.js —
+ * this class owns spawning, hit attribution, cover layout, and the sim tick glue.
+ */
 export class GuerrillaAiDirector {
   public coverNodes: CoverNode[] = [];
   public blackboard: SquadBlackboard = {
@@ -33,13 +37,9 @@ export class GuerrillaAiDirector {
   public enemies: EnemyCombatant[] = [];
   public friendlies: FriendlyCombatant[] = [];
 
-  // Wave Respawn System
   public currentWave: number = 1;
   public waveSpawnPending: boolean = false;
   public waveSpawnTimer: number = 0;
-
-  // Commander Tactical Orders
-  public commanderOrderTimer: number = 2.5;
 
   public onWaveAnnounce?: (msg: string) => void;
   public onCombatBark?: (speaker: string, text: string, isBluefor: boolean) => void;
@@ -84,7 +84,7 @@ export class GuerrillaAiDirector {
     }
   }
 
-  // --- FRIENDLY AI SQUAD: RESPAWN & TACTICAL FIRETEAM INITIALIZATION ---
+  /** Independent bluefor fireteam — spawn near the LZ, then pursue own objectives. */
   public spawnFriendlySquad(playerAnchor = { x: 0, z: 0 }): void {
     const prevDoc = this.friendlies.find((f) => f.id === 'doc_miller');
     const prevRuiz = this.friendlies.find((f) => f.id === 'sgt_ruiz');
@@ -106,7 +106,7 @@ export class GuerrillaAiDirector {
         shootCooldown: 1.2,
         targetEnemyId: null,
         formationOffset: { x: -2.8, z: 2.0 },
-        state: 'follow',
+        state: 'bounding',
         isShooting: false,
         lastBark: '',
         lastBarkTime: 0,
@@ -146,7 +146,7 @@ export class GuerrillaAiDirector {
         shootCooldown: 1.5,
         targetEnemyId: null,
         formationOffset: { x: -3.8, z: 3.8 },
-        state: 'bounding',
+        state: 'take_cover',
         isShooting: false,
         lastBark: '',
         lastBarkTime: 0,
@@ -166,7 +166,7 @@ export class GuerrillaAiDirector {
         shootCooldown: 1.4,
         targetEnemyId: null,
         formationOffset: { x: 3.8, z: 3.8 },
-        state: 'follow',
+        state: 'bounding',
         isShooting: false,
         lastBark: '',
         lastBarkTime: 0,
@@ -188,13 +188,10 @@ export class GuerrillaAiDirector {
     }
   }
 
-  // --- RANDOMIZED INFILTRATION SPAWNS (ANTI-CAMPING SYSTEM) ---
   public spawnWave(waveNum: number): void {
     this.currentWave = waveNum;
     this.waveSpawnPending = false;
-    this.commanderOrderTimer = 3.0;
 
-    // Pick a randomized infiltration approach so the player can never sit and camp one angle!
     const approaches = ['north_assault', 'east_flank', 'west_breach', 'pincer_ambush'] as const;
     const approach = approaches[Math.floor(Math.random() * approaches.length)];
 
@@ -217,7 +214,6 @@ export class GuerrillaAiDirector {
       flankWPos = { x: -28, y: 0, z: -20 };
       flankEPos = { x: -15, y: 0, z: 20 };
     } else if (approach === 'pincer_ambush') {
-      // 360-degree split assault
       sgtPos = { x: 0, y: 0, z: -34 };
       rpkPos = { x: -26, y: 0, z: 0 };
       svdPos = { x: 26, y: 0, z: 0 };
@@ -225,19 +221,20 @@ export class GuerrillaAiDirector {
       flankEPos = { x: 20, y: 0, z: 24 };
     }
 
+    // isCommander is roster flavor only — combat AI is fully peer-elected, no order node.
     const waveRoster: EnemyCombatant[] = [
       {
         id: `wave${waveNum}_sgt`,
         name: 'Sgt. Tariq Al-Masri',
         callsign: 'General Tariq',
-        role: 'Cell Commander (AKM Auto Burst)',
+        role: 'Cell Assault Lead (AKM Auto Burst)',
         isCommander: true,
         position: sgtPos,
         rotationY: Math.PI,
         health: 100,
         kills: 0,
         deaths: 0,
-        state: 'commander',
+        state: 'advance',
         targetPosition: { x: 0, y: 0, z: 0 },
         shootCooldown: 0.9,
         burstRemaining: 3,
@@ -390,10 +387,10 @@ export class GuerrillaAiDirector {
       approach === 'east_flank'
         ? 'INCOMING HOSTILES BREACHING EAST SECTOR!'
         : approach === 'west_breach'
-        ? 'INCOMING HOSTILES INFILTRATING WEST BERM!'
-        : approach === 'pincer_ambush'
-        ? 'ALERT: MULTI-VECTOR PINCER AMBUSH DETECTED!'
-        : 'HOSTILE CELL ADVANCING FROM NORTH COMPLEX!';
+          ? 'INCOMING HOSTILES INFILTRATING WEST BERM!'
+          : approach === 'pincer_ambush'
+            ? 'ALERT: MULTI-VECTOR PINCER AMBUSH DETECTED!'
+            : 'HOSTILE CELL ADVANCING FROM NORTH COMPLEX!';
 
     this.broadcastBark(
       'Sgt. Tariq Al-Masri',
@@ -498,10 +495,6 @@ export class GuerrillaAiDirector {
     return dist;
   }
 
-  /**
-   * COVER SEARCH CONSTRAINED TO SQUAD PROXIMITY:
-   * Only returns cover within maxDist of entity so friendlies never abandon the squad!
-   */
   public queryBestLocalCover(
     entityPos: { x: number; y: number; z: number } | null | undefined,
     threatPos: { x: number; y: number; z: number } | null | undefined,
@@ -539,7 +532,6 @@ export class GuerrillaAiDirector {
     return bestNode;
   }
 
-  // --- HIT DETECTION & REAL KILL ATTRIBUTION ---
   public hitEnemy(enemyId: string, damage: number, shooterId: string): boolean {
     const enemy = this.enemies.find((e) => e.id === enemyId);
     if (!enemy || enemy.health <= 0) return false;
@@ -1070,10 +1062,6 @@ export class GuerrillaAiDirector {
       }
     }
   }
-}
-
-function THREE_LERP(a: number, b: number, t: number) {
-  return a + (b - a) * t;
 }
 
 export const aiDirector = new GuerrillaAiDirector();

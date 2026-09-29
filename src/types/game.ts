@@ -254,7 +254,6 @@ export type EnemyAction =
   | 'flank_left'
   | 'flank_right'
   | 'retreat_heal'
-  | 'commander'
   | 'overwatch'
   | 'advance'
   | 'dead';
@@ -302,7 +301,7 @@ export interface FriendlyCombatant {
   shootCooldown: number;
   targetEnemyId: string | null;
   formationOffset: { x: number; z: number };
-  state: 'follow' | 'take_cover' | 'suppress' | 'bounding';
+  state: 'take_cover' | 'suppress' | 'bounding';
   isShooting: boolean;
   lastBark: string;
   lastBarkTime: number;
