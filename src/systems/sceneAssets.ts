@@ -15,10 +15,14 @@ export const COLLISION_SKIP_LAYER = 2;
 
 const CHARACTER_HEIGHT = 1.82;
 
-function loadGltf(url: string): Promise<THREE.Object3D> {
+function loadGltf(url: string, attempt = 0): Promise<THREE.Object3D> {
   const loader = new GLTFLoader();
-  return new Promise((resolve, reject) => {
+  return new Promise<THREE.Object3D>((resolve, reject) => {
     loader.load(url, (gltf) => resolve(gltf.scene), undefined, (error) => reject(error));
+  }).catch(async (error: unknown) => {
+    if (attempt >= 2) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return loadGltf(url, attempt + 1);
   });
 }
 

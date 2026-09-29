@@ -28,6 +28,8 @@ export class CityCollision {
   readonly raycaster = new THREE.Raycaster();
   private meshes: THREE.Mesh[] = [];
   ready = false;
+  /** Outer edge of walkable floors, before the boundary walls. */
+  playableEdge = { minX: -40, maxX: 40, minZ: -40, maxZ: 40 };
 
   buildFrom(root: THREE.Object3D): void {
     root.updateWorldMatrix(true, true);
@@ -48,6 +50,19 @@ export class CityCollision {
       if (worldFaceNormal(hit).y >= 0.45) return hit.point.y;
     }
     return null;
+  }
+
+  /** Highest walkable face near the feet, so a jump is not pulled onto a roof overhead. */
+  private supportNearFeet(x: number, z: number, feetY: number): number | null {
+    const hits = this.rayHitAll(new THREE.Vector3(x, feetY + 2.4, z), new THREE.Vector3(0, -1, 0), 4.8);
+    let ground: number | null = null;
+    for (const hit of hits) {
+      if (worldFaceNormal(hit).y < 0.45) continue;
+      const y = hit.point.y;
+      if (y > feetY + 0.45 || y < feetY - 2.2) continue;
+      if (ground == null || y > ground) ground = y;
+    }
+    return ground;
   }
 
   fits(x: number, y: number, z: number, radius = ACTOR_RADIUS): boolean {
@@ -96,8 +111,10 @@ export class CityCollision {
           z = stepZ;
           feetY = stepGround;
           if (velocity.y < 0) velocity.y = 0;
-          this.writeCapsule(capsule, x, feetY, z);
-          return true;
+          if (velocity.y <= 0) {
+            this.writeCapsule(capsule, x, feetY, z);
+            return true;
+          }
         }
       }
       x += dir.x * allowed;
@@ -105,9 +122,25 @@ export class CityCollision {
     }
 
     if (velocity.y < -9) velocity.y = -9;
-    const nextFeet = feetY + velocity.y * dt;
-    const ground = this.sampleGround(x, z, feetY + 1.4, 3.2);
-    if (ground != null && velocity.y <= 0 && nextFeet <= ground + 0.12 && feetY >= ground - 0.9) {
+    let nextFeet = feetY + velocity.y * dt;
+    if (velocity.y > 0) {
+      const head = this.rayHit(new THREE.Vector3(x, feetY + 0.4, z), new THREE.Vector3(0, 1, 0), 1.7);
+      if (head && worldFaceNormal(head).y < -0.25) {
+        const maxRise = Math.max(0, head.distance - 1.45);
+        if (nextFeet - feetY > maxRise) {
+          nextFeet = feetY + maxRise;
+          velocity.y = 0;
+        }
+      }
+    }
+    const ground = this.supportNearFeet(x, z, feetY);
+    const fallingOnto =
+      ground != null &&
+      velocity.y <= 0 &&
+      feetY + 0.08 >= ground &&
+      nextFeet <= ground + 0.05;
+    const sunk = ground != null && velocity.y <= 0 && feetY < ground && feetY >= ground - 0.9;
+    if ((fallingOnto || sunk) && ground != null) {
       this.writeCapsule(capsule, x, ground, z);
       velocity.y = 0;
       return true;
@@ -119,8 +152,9 @@ export class CityCollision {
 
   settle(pos: { x: number; y?: number; z: number }, radius = ACTOR_RADIUS): boolean {
     const hinted = pos.y ?? 0;
-    const ground = this.sampleGround(pos.x, pos.z, hinted + 1.7, 3);
-    if (ground == null || !this.fits(pos.x, ground, pos.z, radius)) return false;
+    const street = hinted > -0.8 && hinted < 1 ? this.sampleStreet(pos.x, pos.z) : null;
+    const ground = street ?? this.sampleGround(pos.x, pos.z, Math.max(hinted + 2, 4), 8);
+    if (ground == null || ground > 0.45 || !this.fits(pos.x, ground, pos.z, radius)) return false;
     pos.y = ground;
     return true;
   }
@@ -135,42 +169,64 @@ export class CityCollision {
     return this.rayHit(from, delta, reach) != null;
   }
 
+  addColliders(objects: THREE.Object3D[]): void {
+    for (const obj of objects) {
+      obj.updateWorldMatrix(true, true);
+      obj.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.isMesh) this.meshes.push(mesh);
+      });
+    }
+  }
+
+  /**
+   * Lowest walkable street deck. Car roofs and building tops sit above this
+   * band, so a spawn ray that hits them keeps going down to the road.
+   */
+  sampleStreet(x: number, z: number): number | null {
+    const hits = this.rayHitAll(new THREE.Vector3(x, 40, z), new THREE.Vector3(0, -1, 0), 48);
+    let street: number | null = null;
+    for (const hit of hits) {
+      if (worldFaceNormal(hit).y < 0.45) continue;
+      const y = hit.point.y;
+      if (y < -0.55 || y > 0.4) continue;
+      if (street == null || y < street) street = y;
+    }
+    return street;
+  }
+
   collectSpawns(friendlyCount: number, enemyCount: number, coverCount: number): CitySpawnLayout {
-    const bounds = new THREE.Box3();
-    for (const mesh of this.meshes) bounds.expandByObject(mesh);
     const spots: CityPoint[] = [];
-    const step = 5;
-    for (let x = bounds.min.x + 2; x <= bounds.max.x - 2; x += step) {
-      for (let z = bounds.min.z + 2; z <= bounds.max.z - 2; z += step) {
-        const y = this.sampleGround(x, z, 120, 140);
-        if (y == null || y < -0.8 || y > 1.4) continue;
-        if (!this.fits(x, y, z)) continue;
-        spots.push({ x, y, z });
+    const step = 6;
+    for (let x = mapBounds.minX; x <= mapBounds.maxX; x += step) {
+      for (let z = mapBounds.minZ; z <= mapBounds.maxZ; z += step) {
+        const hits = this.rayHitAll(new THREE.Vector3(x, 30, z), new THREE.Vector3(0, -1, 0), 36);
+        let street: number | null = null;
+        let covered = false;
+        for (const hit of hits) {
+          if (worldFaceNormal(hit).y < 0.45) continue;
+          const y = hit.point.y;
+          if (y > 0.45 && y < 2.3) covered = true;
+          if (y >= -0.55 && y <= 0.4 && (street == null || y < street)) street = y;
+        }
+        if (covered || street == null) continue;
+        spots.push({ x, y: street, z });
       }
     }
 
     if (spots.length === 0) {
-      const center = bounds.getCenter(new THREE.Vector3());
-      const y = this.sampleGround(center.x, center.z, 120, 140) ?? 0;
-      spots.push({ x: center.x, y, z: center.z });
+      const x = (mapBounds.minX + mapBounds.maxX) / 2;
+      const z = (mapBounds.minZ + mapBounds.maxZ) / 2;
+      spots.push({ x, y: this.sampleStreet(x, z) ?? 0, z });
     }
 
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minZ = Infinity;
-    let maxZ = -Infinity;
+    let sumX = 0;
+    let sumZ = 0;
     for (const spot of spots) {
-      minX = Math.min(minX, spot.x);
-      maxX = Math.max(maxX, spot.x);
-      minZ = Math.min(minZ, spot.z);
-      maxZ = Math.max(maxZ, spot.z);
+      sumX += spot.x;
+      sumZ += spot.z;
     }
-    mapBounds.minX = minX - 1.5;
-    mapBounds.maxX = maxX + 1.5;
-    mapBounds.minZ = minZ - 1.5;
-    mapBounds.maxZ = maxZ + 1.5;
-
-    const center = { x: (minX + maxX) / 2, y: 0, z: (minZ + maxZ) / 2 };
+    const center = { x: sumX / spots.length, y: 0, z: sumZ / spots.length };
     const player = nearest(spots, center);
     const friendlies = pick(spots, player, friendlyCount, 3.5, false, 2.5);
     const enemies = pick(spots, player, enemyCount, 8, true, 18);

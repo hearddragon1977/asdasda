@@ -55,6 +55,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   const miniRadarCanvasRef = useRef<HTMLCanvasElement>(null);
 
   const keysPressed = useRef<{ [key: string]: boolean }>({});
+  const jumpHeld = useRef(false);
   const isMouseDown = useRef<boolean>(false);
   const lastShotTime = useRef<number>(0);
 
@@ -130,6 +131,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     if (curWep.isReloading || curWep.currentMagRounds >= magSize || reserve <= 0) return;
 
     onUpdateWeapon((prev) => ({ ...prev, isReloading: true }));
+    worldRef.current?.triggerPlayerReload();
     tacticalAudio.playMagCheck();
     setReloadProgress(0);
 
@@ -223,12 +225,17 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
     world.setGodMode(godMode);
+    let mapLoadActive = true;
     setMapStatus('loading');
     world.onMapReady = (layout) => {
+      if (!mapLoadActive) return;
       aiDirector.relocateToCity(layout);
       setMapStatus('ready');
     };
-    world.onMapFailed = () => setMapStatus('error');
+    world.onMapFailed = () => {
+      if (!mapLoadActive) return;
+      setMapStatus('error');
+    };
 
     const initialWidth = containerRef.current.clientWidth || window.innerWidth;
     const initialHeight = containerRef.current.clientHeight || (window.innerHeight - 48);
@@ -248,11 +255,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       keysPressed.current[e.code] = true;
       keysPressed.current[key] = true;
 
+      if (e.code === 'Space') e.preventDefault();
       if (e.key === 'Escape') onOpenPauseMenu();
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        onOpenScoreboard();
-      }
+      if (e.key === 'Tab') e.preventDefault();
       if (key === 'g') onToggleGodMode();
       if (e.code === 'KeyR' || key === 'r') triggerReload();
       if (e.code === 'KeyM' || key === 'm') onToggleMap();
@@ -262,6 +267,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       if (e.code === 'KeyV' || key === 'v') {
         onUpdateWeapon((prev) => ({ ...prev, aimingDownSights: !prev.aimingDownSights }));
       }
+      if ((e.code === 'KeyH' || key === 'h') && !e.repeat) worldRef.current?.triggerPlayerSignal();
       if (e.code === 'KeyL' || key === 'l') {
         const fx = playerEquipment.getAttachmentEffects();
         if (!fx.hasFlashlight) return;
@@ -495,6 +501,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     animFrame = requestAnimationFrame(loop);
 
     return () => {
+      mapLoadActive = false;
       cancelAnimationFrame(animFrame);
       if (reloadTimerRef.current) clearInterval(reloadTimerRef.current);
       window.removeEventListener('resize', handleResize);
@@ -576,6 +583,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   };
 
   const updatePlayerMovement = (dt: number, world: ThreeTacticalWorld) => {
+    // W toward the crosshair, S back, A left, D right. movePlayer applies this in the world.
     let forward = 0;
     let strafe = 0;
 
@@ -589,7 +597,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       forward -= leftMoveDelta.current.y;
     }
 
-    let speed = 6.2 * playerEquipment.getMoveSpeedMultiplier();
+    const sprinting =
+      !anatomySim.vitals.paralyzed &&
+      !anatomySim.vitals.limping &&
+      (keysPressed.current['ShiftLeft'] || keysPressed.current['ShiftRight']);
+    let speed = (sprinting ? 10.6 : 6.2) * playerEquipment.getMoveSpeedMultiplier();
     if (!godMode) {
       if (anatomySim.vitals.paralyzed) {
         speed = 2.4;
@@ -600,12 +612,16 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
     const beforeX = world.playerGroup.position.x;
     const beforeZ = world.playerGroup.position.z;
-    world.movePlayer(forward, strafe, dt, speed);
+    const spaceDown = Boolean(keysPressed.current['Space'] || keysPressed.current[' ']);
+    const jump = spaceDown && !jumpHeld.current;
+    jumpHeld.current = spaceDown;
+    world.movePlayer(forward, strafe, dt, speed, jump);
 
     const stepSpeed =
       dt > 0
         ? Math.hypot(world.playerGroup.position.x - beforeX, world.playerGroup.position.z - beforeZ) / dt
         : 0;
+    world.setPlayerLocomotion(stepSpeed, sprinting && stepSpeed > 4.8);
     audioManager.updateFootsteps(
       'player',
       { x: world.playerGroup.position.x, y: world.playerGroup.position.y, z: world.playerGroup.position.z },
@@ -704,6 +720,12 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         <span>Click to look</span>
         <span>·</span>
         <span>WASD: Move</span>
+        <span>·</span>
+        <span>SPACE: Jump</span>
+        <span>·</span>
+        <span>SHIFT: Sprint</span>
+        <span>·</span>
+        <span>H: Hand signal</span>
         <span>·</span>
         <span className="text-amber-300 font-bold">L-Click: Auto M4 Fire</span>
         <span>·</span>

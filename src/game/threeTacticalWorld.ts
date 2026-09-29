@@ -4,9 +4,11 @@ import { EnemyCombatant, FriendlyCombatant } from '../types/game';
 import { obstaclesToColliders, stepProjectileThroughCover } from '../systems/ballistics.js';
 import { suppressionSystem } from '../systems/suppression.js';
 import { structuralAssets } from '../systems/assetLoader';
+import { mountNightfang, NightfangAnimator } from './nightfangAnimator';
 import { loadGhostCity, loadNightfangTemplate, tintActor } from '../systems/sceneAssets';
 import { CityCollision, CitySpawnLayout } from './cityCollision';
 import { mapBounds } from './mapBounds';
+import { cameraRelativeWish } from './playerMovement';
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
@@ -125,6 +127,7 @@ export class ThreeTacticalWorld {
   private city: CityCollision | null = null;
   private characterTemplate: THREE.Object3D | null = null;
   private playerVelocity = new THREE.Vector3();
+  private playerOnGround = true;
   private playerCollider = new Capsule(new THREE.Vector3(0, 0.35, 22), new THREE.Vector3(0, 1.5, 22), 0.3);
   private spawnPoint = new THREE.Vector3(0, 0, 22);
   private lookYaw = 0;
@@ -133,6 +136,8 @@ export class ThreeTacticalWorld {
   private swayZ = 0;
   private disposed = false;
   private readonly localActorLayer = 1;
+  private playerAnimator: NightfangAnimator | null = null;
+  private adsActive = false;
   public onMapReady?: (layout: CitySpawnLayout) => void;
   public onMapFailed?: (message: string) => void;
 
@@ -241,7 +246,6 @@ export class ThreeTacticalWorld {
     const friendlyPad = TACTICAL_SPAWN_ZONES.find((z) => z.id === 'friendly_staging');
     this.playerGroup.position.set(friendlyPad?.position.x ?? 0, 0, friendlyPad?.position.z ?? 22);
     this.playerMesh = new THREE.Group();
-    this.playerMesh.layers.set(this.localActorLayer);
     this.playerGroup.add(this.playerMesh);
     this.barrelMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.01, 0.01, 0.01),
@@ -299,7 +303,23 @@ export class ThreeTacticalWorld {
       if (this.disposed) return;
       this.city = city;
 
-      const layout = city.collectSpawns(4, 6, 12);
+      try {
+        this.buildCityWalls();
+      } catch (wallError) {
+        console.error(wallError);
+      }
+      let layout: CitySpawnLayout;
+      try {
+        layout = city.collectSpawns(4, 6, 12);
+      } catch (spawnError) {
+        console.error(spawnError);
+        const spot = {
+          x: (mapBounds.minX + mapBounds.maxX) / 2,
+          y: 0,
+          z: (mapBounds.minZ + mapBounds.maxZ) / 2,
+        };
+        layout = { player: spot, friendlies: [spot, spot, spot, spot], enemies: [spot], covers: [spot] };
+      }
       this.spawnPoint.set(layout.player.x, layout.player.y, layout.player.z);
       this.placePlayerCapsule(layout.player.x, layout.player.y, layout.player.z);
       const aim = layout.enemies[0] ?? layout.covers[0] ?? layout.player;
@@ -309,17 +329,30 @@ export class ThreeTacticalWorld {
       this.syncFeetFromCollider();
       this.onMapReady?.(layout);
     } catch (error) {
+      if (this.disposed) return;
+      console.error(error);
       const message = error instanceof Error ? error.message : 'Ghost city failed to load';
       this.onMapFailed?.(message);
     }
   }
 
   private attachLocalPlayerModel(template: THREE.Object3D): void {
-    const model = template.clone(true);
-    model.traverse((obj) => {
-      obj.layers.set(this.localActorLayer);
-    });
-    this.playerMesh.add(model);
+    const { pose, animator } = mountNightfang(template);
+    this.playerMesh.add(pose);
+    this.playerAnimator = animator;
+  }
+
+  /** Walk / sprint from movement, plus reload and hand-signal one-shots. */
+  public setPlayerLocomotion(speed: number, sprinting: boolean): void {
+    this.playerAnimator?.setLocomotion(speed, sprinting);
+  }
+
+  public triggerPlayerReload(): void {
+    this.playerAnimator?.triggerReload(1.15);
+  }
+
+  public triggerPlayerSignal(): void {
+    this.playerAnimator?.triggerSignal(1.2);
   }
 
   private placePlayerCapsule(x: number, y: number, z: number): void {
@@ -350,15 +383,14 @@ export class ThreeTacticalWorld {
 
   /**
    * First-person move. forward/strafe are in look space (W = +forward, D = +strafe).
-   * Gravity and street rays keep the capsule on walkable ground.
+   * Space jumps while the capsule is on the ground. Gravity pulls it back down.
    */
-  public movePlayer(forward: number, strafe: number, dt: number, speed: number): void {
+  public movePlayer(forward: number, strafe: number, dt: number, speed: number, jump = false): void {
     if (!this.city?.ready) return;
 
-    const sin = Math.sin(this.lookYaw);
-    const cos = Math.cos(this.lookYaw);
-    const wishX = sin * forward + cos * strafe;
-    const wishZ = cos * forward - sin * strafe;
+    const wish = cameraRelativeWish(this.lookYaw, forward, strafe);
+    const wishX = wish.x;
+    const wishZ = wish.z;
     const wishLen = Math.hypot(wishX, wishZ);
     if (wishLen > 0.001) {
       this.playerVelocity.x = (wishX / wishLen) * speed;
@@ -368,13 +400,19 @@ export class ThreeTacticalWorld {
       this.playerVelocity.z = 0;
     }
 
-    this.playerVelocity.y -= 28 * dt;
-    this.city.moveCapsule(this.playerCollider, this.playerVelocity, dt);
+    if (jump && this.playerOnGround) {
+      this.playerVelocity.y = 8.4;
+      this.playerOnGround = false;
+    } else {
+      this.playerVelocity.y -= 28 * dt;
+    }
+    this.playerOnGround = this.city.moveCapsule(this.playerCollider, this.playerVelocity, dt);
     this.syncFeetFromCollider();
 
     if (this.playerGroup.position.y < -12) {
       this.placePlayerCapsule(this.spawnPoint.x, this.spawnPoint.y, this.spawnPoint.z);
       this.playerVelocity.set(0, 0, 0);
+      this.playerOnGround = true;
       this.syncFeetFromCollider();
     }
   }
@@ -394,36 +432,73 @@ export class ThreeTacticalWorld {
     return true;
   }
 
-  private makeActorModel(emissive: number): THREE.Object3D {
+  private makeActorModel(emissive: number): { pose: THREE.Group; animator: NightfangAnimator } {
     const template = this.characterTemplate;
-    if (!template) return new THREE.Group();
-    const model = template.clone(true);
-    tintActor(model, emissive);
+    if (!template) {
+      const pose = new THREE.Group();
+      return { pose, animator: new NightfangAnimator(pose) };
+    }
+    const { pose, animator } = mountNightfang(template);
+    tintActor(pose, emissive);
     const band = new THREE.Mesh(
       new THREE.TorusGeometry(0.36, 0.03, 8, 18),
       new THREE.MeshBasicMaterial({ color: emissive })
     );
     band.rotation.x = Math.PI / 2;
     band.position.y = 1.02;
-    const wrapper = new THREE.Group();
-    wrapper.add(model);
-    wrapper.add(band);
-    return wrapper;
+    pose.add(band);
+    return { pose, animator };
+  }
+
+  private driveActor(
+    group: THREE.Group,
+    speed: number,
+    sprint: boolean,
+    shootCooldown: number,
+    signal: boolean
+  ): void {
+    const animator = group.userData.animator as NightfangAnimator | undefined;
+    if (!animator) return;
+    const previousCooldown = group.userData.shootCooldown as number | undefined;
+    if (previousCooldown !== undefined && shootCooldown > previousCooldown + 0.2) {
+      animator.triggerReload();
+    }
+    group.userData.shootCooldown = shootCooldown;
+    const previousSignal = group.userData.signaling === true;
+    if (signal && !previousSignal) animator.triggerSignal();
+    group.userData.signaling = signal;
+    animator.setLocomotion(speed, sprint);
+  }
+
+  private actorSpeed(group: THREE.Group, x: number, z: number): number {
+    const now = performance.now();
+    const prev = group.userData.step as { x: number; z: number; t: number } | undefined;
+    group.userData.step = { x, z, t: now };
+    if (!prev) return 0;
+    const elapsed = (now - prev.t) / 1000;
+    if (elapsed <= 0.0001) return 0;
+    return Math.hypot(x - prev.x, z - prev.z) / elapsed;
   }
 
   private updateFirstPersonCamera(): void {
-    const eye = 1.6;
     const feet = this.playerGroup.position;
-    this.camera.position.set(feet.x + this.swayX * 0.04, feet.y + eye, feet.z + this.swayZ * 0.04);
-    const cosPitch = Math.cos(this.lookPitch);
-    const look = new THREE.Vector3(
-      Math.sin(this.lookYaw) * cosPitch,
-      Math.sin(this.lookPitch),
-      Math.cos(this.lookYaw) * cosPitch
+    const yaw = this.lookYaw;
+    const sin = Math.sin(yaw);
+    const cos = Math.cos(yaw);
+    const back = this.adsActive ? 1.05 : 2.45;
+    const side = this.adsActive ? 0.18 : 0.48;
+    const eye = this.adsActive ? 1.58 : 1.72;
+    this.camera.position.set(
+      feet.x - sin * back + cos * side + this.swayX * 0.04,
+      feet.y + eye,
+      feet.z - cos * back - sin * side + this.swayZ * 0.04
     );
+    const cosPitch = Math.cos(this.lookPitch);
+    const look = new THREE.Vector3(sin * cosPitch, Math.sin(this.lookPitch), cos * cosPitch);
+    const aimFrom = new THREE.Vector3(feet.x, feet.y + 1.5, feet.z);
     this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(this.camera.position.clone().add(look));
-    this.aimPoint.copy(this.camera.position).addScaledVector(look, 48);
+    this.camera.lookAt(aimFrom.clone().addScaledVector(look, 24));
+    this.aimPoint.copy(aimFrom).addScaledVector(look, 48);
     this.tacticalLight.target.position.set(0, 1.48 + Math.sin(this.lookPitch) * 6, Math.max(0.2, cosPitch) * 8);
   }
 
@@ -443,6 +518,222 @@ export class ThreeTacticalWorld {
     this.buildSupplyCrates();
     this.buildSpawnZones();
     this.buildCornerWatchtowers();
+  }
+
+  /**
+   * Walls follow the outline of the city meshes that touch the ground,
+   * so the barrier sits on the real map edge instead of a loose rectangle.
+   */
+  private buildCityWalls(): void {
+    const cityRoot = this.scene.getObjectByName('ghost_city');
+    if (!cityRoot || !this.city) return;
+
+    const footprints: Array<{ minX: number; maxX: number; minZ: number; maxZ: number }> = [];
+    cityRoot.updateWorldMatrix(true, true);
+    cityRoot.traverse((obj) => {
+      const mesh = obj as THREE.Mesh;
+      if (!mesh.isMesh || !mesh.visible) return;
+      const label = `${mesh.name} ${mesh.parent?.name ?? ''}`;
+      if (/bake|vhc|mobil|car/i.test(label)) return;
+      if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+      const local = mesh.geometry.boundingBox;
+      if (!local) return;
+      const bb = local.clone().applyMatrix4(mesh.matrixWorld);
+      if (bb.min.y > 1.2) return;
+      if (Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) < 4) return;
+      footprints.push({ minX: bb.min.x, maxX: bb.max.x, minZ: bb.min.z, maxZ: bb.max.z });
+    });
+    if (footprints.length === 0) return;
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (const foot of footprints) {
+      minX = Math.min(minX, foot.minX);
+      maxX = Math.max(maxX, foot.maxX);
+      minZ = Math.min(minZ, foot.minZ);
+      maxZ = Math.max(maxZ, foot.maxZ);
+    }
+
+    const cell = 2;
+    const cols = Math.max(1, Math.ceil((maxX - minX) / cell));
+    const rows = Math.max(1, Math.ceil((maxZ - minZ) / cell));
+    if (cols * rows > 250_000) return;
+    const solid = new Uint8Array(cols * rows);
+    const index = (c: number, r: number) => r * cols + c;
+    for (const foot of footprints) {
+      const c0 = Math.max(0, Math.floor((foot.minX - minX) / cell));
+      const c1 = Math.min(cols - 1, Math.floor((foot.maxX - minX) / cell));
+      const r0 = Math.max(0, Math.floor((foot.minZ - minZ) / cell));
+      const r1 = Math.min(rows - 1, Math.floor((foot.maxZ - minZ) / cell));
+      for (let r = r0; r <= r1; r++) {
+        for (let c = c0; c <= c1; c++) solid[index(c, r)] = 1;
+      }
+    }
+
+    // Bridge small cracks between street meshes, then keep walls on the outside
+    // of the city only. An interior seam must not grow a barrier across the road.
+    let grown = solid;
+    for (let pass = 0; pass < 2; pass++) {
+      const next = new Uint8Array(cols * rows);
+      next.set(grown);
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          if (grown[index(c, r)] !== 1) continue;
+          for (let dr = -1; dr <= 1; dr++) {
+            for (let dc = -1; dc <= 1; dc++) {
+              const nc = c + dc;
+              const nr = r + dr;
+              if (nc >= 0 && nr >= 0 && nc < cols && nr < rows) next[index(nc, nr)] = 1;
+            }
+          }
+        }
+      }
+      grown = next;
+    }
+
+    const exterior = new Uint8Array(cols * rows);
+    const stack: number[] = [];
+    const markOutside = (c: number, r: number) => {
+      if (c < 0 || r < 0 || c >= cols || r >= rows) return;
+      const i = index(c, r);
+      if (grown[i] === 1 || exterior[i] === 1) return;
+      exterior[i] = 1;
+      stack.push(i);
+    };
+    for (let c = 0; c < cols; c++) {
+      markOutside(c, 0);
+      markOutside(c, rows - 1);
+    }
+    for (let r = 0; r < rows; r++) {
+      markOutside(0, r);
+      markOutside(cols - 1, r);
+    }
+    while (stack.length > 0) {
+      const i = stack.pop() as number;
+      const c = i % cols;
+      const r = (i - c) / cols;
+      markOutside(c + 1, r);
+      markOutside(c - 1, r);
+      markOutside(c, r + 1);
+      markOutside(c, r - 1);
+    }
+
+    const isSolid = (c: number, r: number) =>
+      c >= 0 && r >= 0 && c < cols && r < rows && grown[index(c, r)] === 1;
+    const isOutside = (c: number, r: number) => {
+      if (c < 0 || r < 0 || c >= cols || r >= rows) return true;
+      return exterior[index(c, r)] === 1;
+    };
+
+    const material = new THREE.MeshStandardMaterial({ color: 0x3f3f46, roughness: 0.92 });
+    const height = 4.2;
+    const thick = 0.85;
+    const baseY = -0.35;
+    const meshes: THREE.Mesh[] = [];
+    let wallId = 0;
+    const addWall = (x: number, z: number, sx: number, sz: number) => {
+      const geo = new THREE.BoxGeometry(Math.max(sx, 0.3), height, Math.max(sz, 0.3));
+      const mesh = new THREE.Mesh(geo, material);
+      mesh.position.set(x, baseY + height / 2, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      this.scene.add(mesh);
+      meshes.push(mesh);
+      wallId += 1;
+      this.obstacles.push({
+        id: `city_edge_${wallId}`,
+        mesh,
+        type: 'perimeter',
+        pos: { x, y: baseY + height / 2, z },
+        vel: { x: 0, z: 0 },
+        size: { x: Math.max(sx, 0.3), y: height, z: Math.max(sz, 0.3) },
+        movable: false,
+        mass: 9999,
+        ballisticMaterial: 'concrete',
+      });
+    };
+
+    for (let r = 0; r < rows; r++) {
+      let run = -1;
+      const closeNorth = (end: number) => {
+        if (run < 0) return;
+        const x0 = minX + run * cell;
+        const x1 = minX + (end + 1) * cell;
+        addWall((x0 + x1) / 2, minZ + r * cell - thick / 2, x1 - x0, thick);
+        run = -1;
+      };
+      let south = -1;
+      const closeSouth = (end: number) => {
+        if (south < 0) return;
+        const x0 = minX + south * cell;
+        const x1 = minX + (end + 1) * cell;
+        addWall((x0 + x1) / 2, minZ + (r + 1) * cell + thick / 2, x1 - x0, thick);
+        south = -1;
+      };
+      for (let c = 0; c <= cols; c++) {
+        const northEdge = c < cols && isSolid(c, r) && isOutside(c, r - 1);
+        if (northEdge) {
+          if (run < 0) run = c;
+        } else if (run >= 0) closeNorth(c - 1);
+        const southEdge = c < cols && isSolid(c, r) && isOutside(c, r + 1);
+        if (southEdge) {
+          if (south < 0) south = c;
+        } else if (south >= 0) closeSouth(c - 1);
+      }
+    }
+
+    for (let c = 0; c < cols; c++) {
+      let west = -1;
+      const closeWest = (end: number) => {
+        if (west < 0) return;
+        const z0 = minZ + west * cell;
+        const z1 = minZ + (end + 1) * cell;
+        addWall(minX + c * cell - thick / 2, (z0 + z1) / 2, thick, z1 - z0);
+        west = -1;
+      };
+      let east = -1;
+      const closeEast = (end: number) => {
+        if (east < 0) return;
+        const z0 = minZ + east * cell;
+        const z1 = minZ + (end + 1) * cell;
+        addWall(minX + (c + 1) * cell + thick / 2, (z0 + z1) / 2, thick, z1 - z0);
+        east = -1;
+      };
+      for (let r = 0; r <= rows; r++) {
+        const westEdge = r < rows && isSolid(c, r) && isOutside(c - 1, r);
+        if (westEdge) {
+          if (west < 0) west = r;
+        } else if (west >= 0) closeWest(r - 1);
+        const eastEdge = r < rows && isSolid(c, r) && isOutside(c + 1, r);
+        if (eastEdge) {
+          if (east < 0) east = r;
+        } else if (east >= 0) closeEast(r - 1);
+      }
+    }
+
+    let sc0 = cols;
+    let sc1 = 0;
+    let sr0 = rows;
+    let sr1 = 0;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (solid[index(c, r)] !== 1) continue;
+        sc0 = Math.min(sc0, c);
+        sc1 = Math.max(sc1, c);
+        sr0 = Math.min(sr0, r);
+        sr1 = Math.max(sr1, r);
+      }
+    }
+    if (sc1 >= sc0 && sr1 >= sr0) {
+      mapBounds.minX = minX + sc0 * cell + 1.4;
+      mapBounds.maxX = minX + (sc1 + 1) * cell - 1.4;
+      mapBounds.minZ = minZ + sr0 * cell + 1.4;
+      mapBounds.maxZ = minZ + (sr1 + 1) * cell - 1.4;
+    }
+
+    this.city.addColliders(meshes);
   }
 
   /** Outer security ring — visible BoxGeometry walls, zero invisible bounds. */
@@ -896,8 +1187,10 @@ export class ThreeTacticalWorld {
     friendlies.forEach((friendly) => {
       let group = this.friendlyMeshes.get(friendly.id);
       if (!group && this.characterTemplate) {
+        const actor = this.makeActorModel(0x0284c7);
         group = new THREE.Group();
-        group.add(this.makeActorModel(0x0284c7));
+        group.add(actor.pose);
+        group.userData.animator = actor.animator;
         this.scene.add(group);
         this.friendlyMeshes.set(friendly.id, group);
       }
@@ -905,6 +1198,14 @@ export class ThreeTacticalWorld {
 
       group.position.set(friendly.position.x, friendly.position.y || 0, friendly.position.z);
       group.rotation.y = friendly.rotationY;
+      const speed = this.actorSpeed(group, friendly.position.x, friendly.position.z);
+      this.driveActor(
+        group,
+        speed,
+        speed > 5.4 || friendly.state === 'bounding',
+        friendly.shootCooldown,
+        friendly.state === 'suppress' || friendly.state === 'take_cover'
+      );
 
       if (friendly.status === 'KIA') {
         group.visible = false;
@@ -919,8 +1220,10 @@ export class ThreeTacticalWorld {
     enemies.forEach((enemy) => {
       let group = this.enemyMeshes.get(enemy.id);
       if (!group && this.characterTemplate) {
+        const actor = this.makeActorModel(0xb91c1c);
         group = new THREE.Group();
-        group.add(this.makeActorModel(0xb91c1c));
+        group.add(actor.pose);
+        group.userData.animator = actor.animator;
 
         if (enemy.isCommander) {
           const crownGeo = new THREE.TorusGeometry(0.28, 0.045, 8, 18);
@@ -938,6 +1241,19 @@ export class ThreeTacticalWorld {
 
       group.position.set(enemy.position.x, enemy.position.y || 0, enemy.position.z);
       group.rotation.y = enemy.rotationY;
+      const speed = this.actorSpeed(group, enemy.position.x, enemy.position.z);
+      const sprinting =
+        speed > 5.2 ||
+        enemy.state === 'advance' ||
+        enemy.state === 'flank_left' ||
+        enemy.state === 'flank_right';
+      this.driveActor(
+        group,
+        speed,
+        sprinting,
+        enemy.shootCooldown ?? 0,
+        enemy.state === 'suppress' || enemy.state === 'overwatch'
+      );
 
       if (enemy.health <= 0) {
         group.visible = false;
@@ -960,7 +1276,9 @@ export class ThreeTacticalWorld {
       dir.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
     }
     dir.normalize();
-    const origin = this.camera.position.clone().addScaledVector(dir, 0.35);
+    const origin = this.playerGroup.position.clone();
+    origin.y += 1.35;
+    origin.addScaledVector(dir, 0.55);
 
     const bGeo = new THREE.SphereGeometry(0.35, 12, 12);
     const bMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
@@ -1057,6 +1375,7 @@ export class ThreeTacticalWorld {
   }
 
   public setAdsZoom(zoom: number, aiming: boolean): void {
+    this.adsActive = aiming;
     const next = this.baseFov / (aiming ? Math.max(1, zoom) : 1);
     if (Math.abs(this.camera.fov - next) > 0.05) {
       this.camera.fov = next;
@@ -1075,6 +1394,14 @@ export class ThreeTacticalWorld {
     onFriendlyHit: (friendlyId: string, shooterId: string, damageScale?: number) => void,
     onEnemyHit: (enemyId: string, shooterId: string, damageScale?: number) => void
   ): void {
+    this.playerAnimator?.update(dt);
+    this.friendlyMeshes.forEach((group) => {
+      (group.userData.animator as NightfangAnimator | undefined)?.update(dt);
+    });
+    this.enemyMeshes.forEach((group) => {
+      (group.userData.animator as NightfangAnimator | undefined)?.update(dt);
+    });
+
     this.updateFirstPersonCamera();
 
     // 3. Update Obstacle Physics
@@ -1190,6 +1517,8 @@ export class ThreeTacticalWorld {
 
   public destroy(): void {
     this.disposed = true;
+    this.onMapReady = undefined;
+    this.onMapFailed = undefined;
     for (const cancel of this.propUpgradeCancels) cancel();
     this.propUpgradeCancels = [];
     if (this.resizeObserver) {
