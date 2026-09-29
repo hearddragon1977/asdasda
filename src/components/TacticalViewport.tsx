@@ -29,6 +29,7 @@ interface TacticalViewportProps {
   onSquadStateChanged?: (friendlies: FriendlyCombatant[], enemies: EnemyCombatant[]) => void;
   onOpenInventory?: () => void;
   loadoutOpen?: boolean;
+  onCityMapImage?: (dataUrl: string) => void;
 }
 
 export const TacticalViewport: React.FC<TacticalViewportProps> = ({
@@ -49,6 +50,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   onSquadStateChanged,
   onOpenInventory,
   loadoutOpen = false,
+  onCityMapImage,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<ThreeTacticalWorld | null>(null);
@@ -66,6 +68,31 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   const suppressionVeilRef = useRef<HTMLDivElement>(null);
   onOpenInventoryRef.current = onOpenInventory;
   loadoutOpenRef.current = loadoutOpen;
+  // The world is built once; the loop and listeners read current props from here.
+  const liveRef = useRef({
+    godMode,
+    isPaused,
+    onCallCasevac,
+    onOpenRoster,
+    onVitalsChanged,
+    onEnemyEliminated,
+    onFriendlyDown,
+    onPlayerPositionChanged,
+    onSquadStateChanged,
+    onCityMapImage,
+  });
+  liveRef.current = {
+    godMode,
+    isPaused,
+    onCallCasevac,
+    onOpenRoster,
+    onVitalsChanged,
+    onEnemyEliminated,
+    onFriendlyDown,
+    onPlayerPositionChanged,
+    onSquadStateChanged,
+    onCityMapImage,
+  };
   useEffect(() => {
     weaponRef.current = weapon;
   }, [weapon]);
@@ -224,12 +251,13 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     tacticalAudio.init();
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
-    world.setGodMode(godMode);
+    world.setGodMode(liveRef.current.godMode);
     let mapLoadActive = true;
     setMapStatus('loading');
-    world.onMapReady = (layout) => {
+    world.onMapReady = (layout, overheadMap) => {
       if (!mapLoadActive) return;
       aiDirector.relocateToCity(layout);
+      if (overheadMap) liveRef.current.onCityMapImage?.(overheadMap);
       setMapStatus('ready');
     };
     world.onMapFailed = () => {
@@ -256,13 +284,10 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       keysPressed.current[key] = true;
 
       if (e.code === 'Space') e.preventDefault();
-      if (e.key === 'Escape') onOpenPauseMenu();
       if (e.key === 'Tab') e.preventDefault();
-      if (key === 'g') onToggleGodMode();
       if (e.code === 'KeyR' || key === 'r') triggerReload();
-      if (e.code === 'KeyM' || key === 'm') onToggleMap();
-      if (e.code === 'Digit9') onCallCasevac();
-      if (e.code === 'KeyP' || key === 'p') onOpenRoster();
+      if (e.code === 'Digit9') liveRef.current.onCallCasevac();
+      if (e.code === 'KeyP' || key === 'p') liveRef.current.onOpenRoster();
       if (e.code === 'KeyI' || key === 'i') onOpenInventoryRef.current?.();
       if (e.code === 'KeyV' || key === 'v') {
         onUpdateWeapon((prev) => ({ ...prev, aimingDownSights: !prev.aimingDownSights }));
@@ -327,32 +352,33 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const loop = (currentTime: number) => {
       const dt = Math.min(0.1, (currentTime - lastTime) / 1000);
       lastTime = currentTime;
+      const live = liveRef.current;
 
-      if (!isPaused && !loadoutOpenRef.current) {
+      if (!live.isPaused && !loadoutOpenRef.current) {
         // Continuous M4 Auto Fire if mouse held down
         if (isMouseDown.current) {
           fireM4Round();
         }
 
         // 1. Update Anatomy if not in god mode
-        if (!godMode) {
+        if (!live.godMode) {
           anatomySim.update(dt);
         }
 
         if (currentTime - lastVitalsSync > 120) {
           lastVitalsSync = currentTime;
-          onVitalsChanged();
+          live.onVitalsChanged();
 
-          if (onPlayerPositionChanged) {
-            onPlayerPositionChanged({
+          if (live.onPlayerPositionChanged) {
+            live.onPlayerPositionChanged({
               x: world.playerGroup.position.x,
               z: world.playerGroup.position.z,
               rotationY: world.playerGroup.rotation.y,
             });
           }
 
-          if (onSquadStateChanged) {
-            onSquadStateChanged(aiDirector.friendlies, aiDirector.enemies);
+          if (live.onSquadStateChanged) {
+            live.onSquadStateChanged(aiDirector.friendlies, aiDirector.enemies);
           }
         }
 
@@ -428,7 +454,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           dt,
           (enemyShooterId, damageScale = 1) => {
             if (damageScale <= 0.05) return;
-            if (!godMode) {
+            if (!liveRef.current.godMode) {
               const zones = [
                 'head_carotid',
                 'torso_lungs',
@@ -446,7 +472,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
               }
               suppressionSystem.registerImpact('hit', damageScale);
               tacticalAudio.playBulletCrack();
-              onVitalsChanged();
+              liveRef.current.onVitalsChanged();
 
               if (anatomySim.vitals.shockStage === 'cardiac_arrest') {
                 const enemy = aiDirector.enemies.find((e) => e.id === enemyShooterId);
@@ -467,7 +493,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             const killed = aiDirector.hitFriendly(friendlyId, amount, enemyShooterId);
             tacticalAudio.playBulletCrack();
             if (killed) {
-              onFriendlyDown(friendlyId, enemyShooterId);
+              liveRef.current.onFriendlyDown(friendlyId, enemyShooterId);
             }
           },
           (enemyId, shooterId, damageScale = 1) => {
@@ -476,7 +502,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             const killed = aiDirector.hitEnemy(enemyId, amount, shooterId);
             tacticalAudio.playBulletCrack();
             if (killed) {
-              onEnemyEliminated(enemyId, shooterId);
+              liveRef.current.onEnemyEliminated(enemyId, shooterId);
             }
           }
         );
@@ -513,7 +539,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       canvas.removeEventListener('contextmenu', handleContextMenu);
       world.destroy();
     };
-  }, [godMode, isPaused]);
+  }, []);
 
   // Mini-Radar Render function
   const renderMiniRadar = (playerPos: THREE.Vector3, playerRotY: number) => {
@@ -573,7 +599,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     ctx.fill();
 
     // Heading arrow
-    const angle = playerRotY + Math.PI / 2;
+    const angle = Math.PI / 2 - playerRotY;
     ctx.strokeStyle = '#86efac';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -602,7 +628,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       !anatomySim.vitals.limping &&
       (keysPressed.current['ShiftLeft'] || keysPressed.current['ShiftRight']);
     let speed = (sprinting ? 10.6 : 6.2) * playerEquipment.getMoveSpeedMultiplier();
-    if (!godMode) {
+    if (!liveRef.current.godMode) {
       if (anatomySim.vitals.paralyzed) {
         speed = 2.4;
       } else if (anatomySim.vitals.limping) {

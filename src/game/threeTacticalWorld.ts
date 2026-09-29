@@ -138,7 +138,7 @@ export class ThreeTacticalWorld {
   private readonly localActorLayer = 1;
   private playerAnimator: NightfangAnimator | null = null;
   private adsActive = false;
-  public onMapReady?: (layout: CitySpawnLayout) => void;
+  public onMapReady?: (layout: CitySpawnLayout, overheadMap: string | null) => void;
   public onMapFailed?: (message: string) => void;
 
   // Ground & Grid
@@ -327,7 +327,13 @@ export class ThreeTacticalWorld {
       this.lookPitch = 0;
       this.playerVelocity.set(0, 0, 0);
       this.syncFeetFromCollider();
-      this.onMapReady?.(layout);
+      let overheadMap: string | null = null;
+      try {
+        overheadMap = this.captureOverheadMap();
+      } catch (captureError) {
+        console.error(captureError);
+      }
+      this.onMapReady?.(layout, overheadMap);
     } catch (error) {
       if (this.disposed) return;
       console.error(error);
@@ -524,6 +530,64 @@ export class ThreeTacticalWorld {
    * Walls follow the outline of the city meshes that touch the ground,
    * so the barrier sits on the real map edge instead of a loose rectangle.
    */
+  /**
+   * Renders the city straight down over mapBounds into a PNG for the tactical map.
+   * Only the city and lights are drawn; image top is -Z and image right is +X,
+   * matching the map's canvas axes.
+   */
+  private captureOverheadMap(size = 768): string | null {
+    const cityRoot = this.scene.getObjectByName('ghost_city');
+    if (!cityRoot) return null;
+
+    const hidden: THREE.Object3D[] = [];
+    for (const child of this.scene.children) {
+      if (child === cityRoot || (child as THREE.Light).isLight || !child.visible) continue;
+      child.visible = false;
+      hidden.push(child);
+    }
+    const fog = this.scene.fog;
+    const background = this.scene.background;
+    this.scene.fog = null;
+    this.scene.background = new THREE.Color(0x090d16);
+
+    const cx = (mapBounds.minX + mapBounds.maxX) / 2;
+    const cz = (mapBounds.minZ + mapBounds.maxZ) / 2;
+    const half = Math.max(mapBounds.maxX - mapBounds.minX, mapBounds.maxZ - mapBounds.minZ) / 2;
+    const cam = new THREE.OrthographicCamera(-half, half, half, -half, 0.1, 400);
+    cam.position.set(cx, 200, cz);
+    cam.up.set(0, 0, -1);
+    cam.lookAt(cx, 0, cz);
+
+    const target = new THREE.WebGLRenderTarget(size, size);
+    target.texture.colorSpace = THREE.SRGBColorSpace;
+    const pixels = new Uint8Array(size * size * 4);
+    try {
+      this.renderer.setRenderTarget(target);
+      this.renderer.render(this.scene, cam);
+      this.renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
+    } finally {
+      this.renderer.setRenderTarget(null);
+      target.dispose();
+      this.scene.fog = fog;
+      this.scene.background = background;
+      for (const child of hidden) child.visible = true;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const image = ctx.createImageData(size, size);
+    const row = size * 4;
+    // WebGL rows start at the bottom.
+    for (let y = 0; y < size; y++) {
+      image.data.set(pixels.subarray((size - 1 - y) * row, (size - y) * row), y * row);
+    }
+    ctx.putImageData(image, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
   private buildCityWalls(): void {
     const cityRoot = this.scene.getObjectByName('ghost_city');
     if (!cityRoot || !this.city) return;
