@@ -48,6 +48,7 @@ function TacticalAppContent() {
   const [, setWounds] = useState<AnatomicalWound[]>(anatomySim.wounds);
 
   // Live Entity States for Real Scoreboard & Real Radar Map
+  const [cityMapImage, setCityMapImage] = useState<string | null>(null);
   const [playerPos, setPlayerPos] = useState<{ x: number; z: number; rotationY: number }>({
     x: 0,
     z: 0,
@@ -560,6 +561,7 @@ function TacticalAppContent() {
           onSquadStateChanged={handleSquadSync}
           onOpenInventory={openInventory}
           loadoutOpen={isInventoryOpen}
+          onCityMapImage={setCityMapImage}
         />
 
         {/* AI CASEVAC 9-Line Extraction Panel & After-Action Report (Reveals health & trauma only upon extraction or DIA!) */}
@@ -589,6 +591,7 @@ function TacticalAppContent() {
         {/* Real Live Topographic Sector Map Modal */}
         <TopoMapModal
           isOpen={isMapOpen}
+          overheadImage={cityMapImage}
           onClose={() => setIsMapOpen(false)}
           playerPos={playerPos}
           friendlies={friendlies}

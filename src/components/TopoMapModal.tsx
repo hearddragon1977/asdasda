@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
+import { mapBounds } from '../game/mapBounds';
 
 interface TopoMapModalProps {
   isOpen: boolean;
@@ -7,6 +8,8 @@ interface TopoMapModalProps {
   playerPos: { x: number; z: number; rotationY: number };
   friendlies: FriendlyCombatant[];
   enemies: EnemyCombatant[];
+  /** Top-down render of the loaded city, covering mapBounds. */
+  overheadImage?: string | null;
 }
 
 export const TopoMapModal: React.FC<TopoMapModalProps> = ({
@@ -15,8 +18,20 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
   playerPos,
   friendlies,
   enemies,
+  overheadImage = null,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const imageRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!overheadImage) {
+      imageRef.current = null;
+      return;
+    }
+    const image = new Image();
+    image.src = overheadImage;
+    imageRef.current = image;
+  }, [overheadImage]);
 
   useEffect(() => {
     if (!isOpen || !canvasRef.current) return;
@@ -30,78 +45,61 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
       const w = canvas.width;
       const h = canvas.height;
 
-      // Coordinate Transform: Three.js World (-50 to 50) -> Canvas (0 to w, 0 to h)
-      const toCanvasX = (worldX: number) => ((worldX + 50) / 100) * w;
-      const toCanvasY = (worldZ: number) => ((worldZ + 50) / 100) * h;
+      // World → canvas: a square view of mapBounds, centered and letterboxed.
+      const spanX = Math.max(1, mapBounds.maxX - mapBounds.minX);
+      const spanZ = Math.max(1, mapBounds.maxZ - mapBounds.minZ);
+      const span = Math.max(spanX, spanZ);
+      const side = Math.min(w, h);
+      const originX = (w - side) / 2;
+      const originY = (h - side) / 2;
+      const centerX = (mapBounds.minX + mapBounds.maxX) / 2;
+      const centerZ = (mapBounds.minZ + mapBounds.maxZ) / 2;
+      const toCanvasX = (worldX: number) => originX + ((worldX - centerX) / span + 0.5) * side;
+      const toCanvasY = (worldZ: number) => originY + ((worldZ - centerZ) / span + 0.5) * side;
 
-      // Background: Dark tactical grid
       ctx.fillStyle = '#090d16';
       ctx.fillRect(0, 0, w, h);
 
-      // Topographic contour rings
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 1;
-      for (let r = 40; r < Math.max(w, h); r += 45) {
-        ctx.beginPath();
-        ctx.arc(w / 2, h / 2, r, 0, Math.PI * 2);
-        ctx.stroke();
+      const image = imageRef.current;
+      if (image && image.complete && image.naturalWidth > 0) {
+        ctx.globalAlpha = 0.85;
+        ctx.drawImage(image, originX, originY, side, side);
+        ctx.globalAlpha = 1;
+      } else {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '11px monospace';
+        ctx.fillText('AWAITING SATELLITE IMAGERY…', originX + 12, originY + 20);
       }
 
-      // 10m Tactical Grid lines
-      ctx.strokeStyle = '#1e293b';
+      // 10m grid over the map square
+      ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
       ctx.lineWidth = 0.8;
-      for (let x = -50; x <= 50; x += 10) {
+      const firstX = Math.ceil((centerX - span / 2) / 10) * 10;
+      for (let x = firstX; x <= centerX + span / 2; x += 10) {
         const cx = toCanvasX(x);
         ctx.beginPath();
-        ctx.moveTo(cx, 0);
-        ctx.lineTo(cx, h);
+        ctx.moveTo(cx, originY);
+        ctx.lineTo(cx, originY + side);
         ctx.stroke();
       }
-      for (let z = -50; z <= 50; z += 10) {
+      const firstZ = Math.ceil((centerZ - span / 2) / 10) * 10;
+      for (let z = firstZ; z <= centerZ + span / 2; z += 10) {
         const cy = toCanvasY(z);
         ctx.beginPath();
-        ctx.moveTo(0, cy);
-        ctx.lineTo(w, cy);
+        ctx.moveTo(originX, cy);
+        ctx.lineTo(originX + side, cy);
         ctx.stroke();
       }
 
-      // Outer Perimeter Wall (-45 to 45)
+      // Walkable boundary
       ctx.strokeStyle = '#475569';
       ctx.lineWidth = 2;
-      ctx.strokeRect(toCanvasX(-45), toCanvasY(-45), (90 / 100) * w, (90 / 100) * h);
-
-      // Real Compound Obstacles & Cover Landmarks
-      ctx.fillStyle = '#334155';
-      ctx.strokeStyle = '#64748b';
-      ctx.lineWidth = 1.5;
-
-      // Northern Bunker (Z = -32)
-      ctx.fillRect(toCanvasX(-12), toCanvasY(-36), (24 / 100) * w, (8 / 100) * h);
-      ctx.strokeRect(toCanvasX(-12), toCanvasY(-36), (24 / 100) * w, (8 / 100) * h);
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '10px monospace';
-      ctx.fillText('NORTH BUNKER COMPLEX', toCanvasX(-10), toCanvasY(-38));
-
-      // Berms (West & East)
-      ctx.fillStyle = '#334155';
-      ctx.fillRect(toCanvasX(-22), toCanvasY(-12), (12 / 100) * w, (4 / 100) * h);
-      ctx.fillRect(toCanvasX(10), toCanvasY(-12), (12 / 100) * w, (4 / 100) * h);
-      ctx.fillText('WEST BERM', toCanvasX(-22), toCanvasY(-14));
-      ctx.fillText('EAST BERM', toCanvasX(10), toCanvasY(-14));
-
-      // Center Supply Crates (Z = -16)
-      ctx.fillStyle = '#57534e';
-      ctx.fillRect(toCanvasX(-6), toCanvasY(-18), (12 / 100) * w, (4 / 100) * h);
-      ctx.fillText('CENTER CRATES', toCanvasX(-5), toCanvasY(-19));
-
-      // Southern Sandbag Line & Extraction LZ Dustoff (Z = 20)
-      ctx.strokeStyle = '#059669';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([4, 4]);
-      ctx.strokeRect(toCanvasX(-10), toCanvasY(18), (20 / 100) * w, (14 / 100) * h);
-      ctx.setLineDash([]);
-      ctx.fillStyle = '#10b981';
-      ctx.fillText('EXTRACTION LZ DUSTOFF', toCanvasX(-9), toCanvasY(26));
+      ctx.strokeRect(
+        toCanvasX(mapBounds.minX),
+        toCanvasY(mapBounds.minZ),
+        toCanvasX(mapBounds.maxX) - toCanvasX(mapBounds.minX),
+        toCanvasY(mapBounds.maxZ) - toCanvasY(mapBounds.minZ)
+      );
 
       // Draw Hostile Enemies (RED BLIPS)
       enemies.forEach((enemy) => {
@@ -149,7 +147,7 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
 
       // Vision cone
       const coneLength = 26;
-      const angle = playerPos.rotationY + Math.PI / 2;
+      const angle = Math.PI / 2 - playerPos.rotationY;
       const spread = 0.45;
 
       ctx.fillStyle = 'rgba(34, 197, 94, 0.15)';
