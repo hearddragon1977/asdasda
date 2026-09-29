@@ -121,6 +121,15 @@ export class ThreeTacticalWorld {
   public playerGroup: THREE.Group;
   public barrelMesh: THREE.Mesh;
   public godModeRing: THREE.Mesh;
+<<<<<<< HEAD
+  /** Weapon-mounted tactical flashlight (dynamic SpotLight). */
+  public tacticalSpot: THREE.SpotLight;
+  public tacticalSpotTarget: THREE.Object3D;
+  private adsZoomMul = 1;
+  private baseCameraFov = 50;
+  private baseCameraHeight = 32;
+  private baseCameraBack = 24;
+=======
   public tacticalLight: THREE.SpotLight;
   private baseFov = 72;
   private propUpgradeCancels: Array<() => void> = [];
@@ -140,6 +149,7 @@ export class ThreeTacticalWorld {
   private adsActive = false;
   public onMapReady?: (layout: CitySpawnLayout) => void;
   public onMapFailed?: (message: string) => void;
+>>>>>>> origin/main
 
   // Ground & Grid
   public groundMesh: THREE.Mesh;
@@ -258,6 +268,17 @@ export class ThreeTacticalWorld {
     this.tacticalLight.castShadow = false;
     this.playerGroup.add(this.tacticalLight);
     this.playerGroup.add(this.tacticalLight.target);
+
+    // Weapon tactical flashlight — casts a dynamic beam when activated
+    this.tacticalSpot = new THREE.SpotLight(0xfff2cc, 0, 40, THREE.MathUtils.degToRad(28), 0.45, 1.2);
+    this.tacticalSpot.position.set(0, 0.35, 1.35);
+    this.tacticalSpot.castShadow = true;
+    this.tacticalSpotVisibleGuard();
+    this.tacticalSpotTarget = new THREE.Object3D();
+    this.tacticalSpotTarget.position.set(0, 0.2, 12);
+    this.playerGroup.add(this.tacticalSpotTarget);
+    this.tacticalSpot.target = this.tacticalSpotTarget;
+    this.playerGroup.add(this.tacticalSpot);
 
     // God Mode Shield Ring
     const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
@@ -1338,6 +1359,47 @@ export class ThreeTacticalWorld {
     this.godModeRing.visible = active;
   }
 
+  /** Ensures spotlight starts disabled (intensity 0). */
+  private tacticalSpotVisibleGuard(): void {
+    this.tacticalSpot.intensity = 0;
+  }
+
+  /**
+   * Toggle / configure the weapon-mounted tactical flashlight from
+   * equipment attachment stats (src/data/gear.js flashlight profiles).
+   */
+  public setTacticalLight(
+    enabled: boolean,
+    profile?: {
+      intensity?: number;
+      rangeM?: number;
+      coneAngleDeg?: number;
+      color?: number;
+    }
+  ): void {
+    if (!enabled) {
+      this.tacticalSpot.intensity = 0;
+      return;
+    }
+    const intensity = profile?.intensity ?? 3.2;
+    const rangeM = profile?.rangeM ?? 36;
+    const cone = profile?.coneAngleDeg ?? 28;
+    const color = profile?.color ?? 0xfff2cc;
+    this.tacticalSpot.color.setHex(color);
+    this.tacticalSpot.distance = rangeM;
+    this.tacticalSpot.angle = THREE.MathUtils.degToRad(cone);
+    this.tacticalSpot.intensity = intensity;
+    this.tacticalSpotTarget.position.set(0, 0.15, Math.max(8, rangeM * 0.45));
+  }
+
+  /**
+   * ADS zoom from equipped optic — pulls the tactical camera in and
+   * tightens FOV while aimingDownSights is active.
+   */
+  public setAdsZoom(zoomMul: number, aiming: boolean): void {
+    this.adsZoomMul = aiming ? Math.max(1, zoomMul) : 1;
+  }
+
   /**
    * CONTINUOUS RAY PROJECTION & STABLE AIM:
    * Sets player rotation towards ground mouse intersection with zero rotational tilt or drift!
@@ -1394,6 +1456,20 @@ export class ThreeTacticalWorld {
     onFriendlyHit: (friendlyId: string, shooterId: string, damageScale?: number) => void,
     onEnemyHit: (enemyId: string, shooterId: string, damageScale?: number) => void
   ): void {
+<<<<<<< HEAD
+    // 1. Camera Follow: Rigid 1:1 camera lock to player position
+    // ADS optic zoom pulls camera in / tightens FOV without changing aim projection.
+    const zoom = this.adsZoomMul;
+    this.camera.position.x = this.playerGroup.position.x;
+    this.camera.position.z = this.playerGroup.position.z + this.baseCameraBack / zoom;
+    this.camera.position.y = this.baseCameraHeight / Math.sqrt(zoom);
+    const targetFov = this.baseCameraFov / zoom;
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov = targetFov;
+      this.camera.updateProjectionMatrix();
+    }
+    this.camera.lookAt(this.playerGroup.position.x, 0, this.playerGroup.position.z);
+=======
     this.playerAnimator?.update(dt);
     this.friendlyMeshes.forEach((group) => {
       (group.userData.animator as NightfangAnimator | undefined)?.update(dt);
@@ -1401,6 +1477,7 @@ export class ThreeTacticalWorld {
     this.enemyMeshes.forEach((group) => {
       (group.userData.animator as NightfangAnimator | undefined)?.update(dt);
     });
+>>>>>>> origin/main
 
     this.updateFirstPersonCamera();
 

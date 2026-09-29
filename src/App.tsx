@@ -16,14 +16,18 @@ import {
   InventoryState,
   CasevacState,
   OperatorRecord,
+  UnitLoadoutState,
 } from './types/game';
 
 import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
+<<<<<<< HEAD
+=======
 import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, switchWeaponSlot, syncWeaponIntoInventory } from './data/inventory.js';
 import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
+>>>>>>> origin/main
 import { equipmentManager, playerEquipment } from './systems/equipment.js';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
@@ -66,6 +70,24 @@ function TacticalAppContent() {
     'OPFOR insurgents advancing through perimeter berms',
   ]);
 
+<<<<<<< HEAD
+  // Weapon state (Authentic M4A1 30-round mag) — attachments seeded from equipment kit
+  const [weapon, setWeapon] = useState<WeaponState>(() => {
+    const base: WeaponState = {
+      currentMagRounds: 30,
+      chambered: true,
+      reserveMags: [30, 30, 24, 18],
+      isReloading: false,
+      isInspectingMag: false,
+      magCheckInspectionText: null,
+      aimingDownSights: false,
+      tacticalLaser: true,
+      tacticalLight: false,
+      dryFired: false,
+    };
+    return playerEquipment.applyToWeaponState(base) as WeaponState;
+  });
+=======
   const [inventory, setInventory] = useState<InventoryState>(() => createDefaultInventory());
   const [isInventoryOpen, setIsInventoryOpen] = useState(false);
   const [weapon, setWeapon] = useState<WeaponState>(() =>
@@ -75,6 +97,11 @@ function TacticalAppContent() {
   const inventoryLive = useRef(inventory);
   weaponLive.current = weapon;
   inventoryLive.current = inventory;
+>>>>>>> origin/main
+
+  const [playerLoadout, setPlayerLoadout] = useState<UnitLoadoutState>(() =>
+    playerEquipment.snapshot()
+  );
 
   // CASEVAC 9-Line State
   const [casevac, setCasevac] = useState<CasevacState>({
@@ -279,9 +306,27 @@ function TacticalAppContent() {
     // Respawn Friendly AI squad on BLUEFOR staging pad with full combat readiness
     aiDirector.spawnFriendlySquad();
     setFriendlies([...aiDirector.friendlies]);
+<<<<<<< HEAD
+    // Replenish weapon ammunition + re-seat default tactical kit
+    equipmentManager.resetPlayer();
+    setWeapon((prev) => {
+      const refreshed = playerEquipment.applyToWeaponState({
+        ...prev,
+        isReloading: false,
+        currentMagRounds: 30,
+        reserveRounds: 120,
+        reserveMags: [30, 30, 30, 30],
+        aimingDownSights: false,
+        tacticalLight: false,
+      }) as WeaponState;
+      return refreshed;
+    });
+    setPlayerLoadout(playerEquipment.snapshot());
+=======
     equipmentManager.resetPlayer();
     const replenished = replenishInventoryAmmo(inventoryLive.current);
     applyLoadout(replenished);
+>>>>>>> origin/main
     handleVitalsChanged();
   };
 
@@ -462,11 +507,15 @@ function TacticalAppContent() {
             Tactical Trauma Simulator
           </span>
           <span className="hidden sm:inline text-xs font-mono text-emerald-400">
+<<<<<<< HEAD
+            · M4A1 · {playerLoadout.equipment.vest ?? 'NO VEST'} · WAVE {currentWave}
+=======
             · {(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).shortName} (
             {(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).fireRateRpm > 0
               ? `${(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).fireRateRpm} RPM`
               : 'SEMI'}
             ) · WAVE {currentWave}
+>>>>>>> origin/main
           </span>
         </div>
 
@@ -558,8 +607,12 @@ function TacticalAppContent() {
           onFriendlyDown={handleFriendlyDown}
           onPlayerPositionChanged={setPlayerPos}
           onSquadStateChanged={handleSquadSync}
+<<<<<<< HEAD
+          onLoadoutChanged={setPlayerLoadout}
+=======
           onOpenInventory={openInventory}
           loadoutOpen={isInventoryOpen}
+>>>>>>> origin/main
         />
 
         {/* AI CASEVAC 9-Line Extraction Panel & After-Action Report (Reveals health & trauma only upon extraction or DIA!) */}

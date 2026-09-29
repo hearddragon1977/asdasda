@@ -46,11 +46,12 @@ class TacticalAudioEngine {
 
   // --- WEAPON & BALLISTICS SFX ---
 
-  public playM4Fire(): void {
+  public playM4Fire(volumeScale = 1): void {
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
     const t = ctx.currentTime;
+    const vol = Math.max(0.05, Math.min(1.5, volumeScale));
 
     // 1. Initial transient crack (fast noise burst)
     const bufferSize = ctx.sampleRate * 0.05;
@@ -67,7 +68,7 @@ class TacticalAudioEngine {
     noiseFilter.frequency.setValueAtTime(1200, t);
 
     const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.9, t);
+    noiseGain.gain.setValueAtTime(0.9 * vol, t);
     noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 0.04);
 
     noise.connect(noiseFilter);
@@ -82,7 +83,7 @@ class TacticalAudioEngine {
     osc.frequency.exponentialRampToValueAtTime(35, t + 0.15);
 
     const oscGain = ctx.createGain();
-    oscGain.gain.setValueAtTime(0.9, t);
+    oscGain.gain.setValueAtTime(0.9 * vol, t);
     oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
 
     osc.connect(oscGain);
@@ -102,11 +103,11 @@ class TacticalAudioEngine {
 
     const revFilter = ctx.createBiquadFilter();
     revFilter.type = 'lowpass';
-    revFilter.frequency.setValueAtTime(2400, t);
+    revFilter.frequency.setValueAtTime(2400 * (0.4 + 0.6 * vol), t);
 
     const revGain = ctx.createGain();
-    revGain.gain.setValueAtTime(0.45, t);
-    revGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    revGain.gain.setValueAtTime(0.45 * vol, t);
+    revGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45 * (0.5 + 0.5 * vol));
 
     revSource.connect(revFilter);
     revFilter.connect(revGain);
