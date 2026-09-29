@@ -52,7 +52,7 @@ export const ScoreboardModal: React.FC<ScoreboardModalProps> = ({
             onClick={onClose}
             className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs border border-slate-600 rounded transition-colors cursor-pointer"
           >
-            CLOSE [TAB / ESC]
+            CLOSE [ESC]
           </button>
         </div>
 
