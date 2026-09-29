@@ -1,4 +1,15 @@
 import * as THREE from 'three';
+import { Capsule } from 'three/addons/math/Capsule.js';
+import { EnemyCombatant, FriendlyCombatant } from '../types/game';
+import { obstaclesToColliders, stepProjectileThroughCover } from '../systems/ballistics.js';
+import { suppressionSystem } from '../systems/suppression.js';
+import { structuralAssets } from '../systems/assetLoader';
+import { mountNightfang, NightfangAnimator } from './nightfangAnimator';
+import { loadGhostCity, loadNightfangTemplate, tintActor } from '../systems/sceneAssets';
+import { CityCollision, CitySpawnLayout } from './cityCollision';
+import { mapBounds } from './mapBounds';
+import { cameraRelativeWish } from './playerMovement';
+
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
 import type { CoverPropKind } from '../systems/mapGenerator';
 import { tacticalLayout } from '../systems/mapGenerator';
@@ -9,6 +20,7 @@ import {
   structuralAssets,
   type CoverMaterialLibrary,
 } from '../systems/assetLoader';
+
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
@@ -38,9 +50,10 @@ export class ThreeTacticalWorld {
   public renderer: THREE.WebGLRenderer;
 
   // Player & Visuals
+  public playerMesh: THREE.Object3D;
   public playerMesh: THREE.Mesh;
+
   public playerGroup: THREE.Group;
-  public barrelMesh: THREE.Mesh;
   public godModeRing: THREE.Mesh;
   public tacticalLight: THREE.SpotLight;
   private baseFov = 72;
@@ -70,6 +83,11 @@ export class ThreeTacticalWorld {
   // Combat Entities Meshes
   public enemyMeshes: Map<string, THREE.Group> = new Map();
   public friendlyMeshes: Map<string, THREE.Group> = new Map();
+
+  private gltfLoader = new GLTFLoader();
+  private friendlyTemplate: THREE.Object3D | null = null;
+  private enemyTemplate: THREE.Object3D | null = null;
+  private characterLoadState: 'loading' | 'ready' | 'failed' = 'loading';
 
   // Physical Obstacles with 1:1 Visual Mesh & AABB Collision (ZERO INVISIBLE OBSTACLES)
   public obstacles: TacticalObstacle[] = [];
@@ -179,6 +197,8 @@ export class ThreeTacticalWorld {
     this.gridHelper.userData.ownsGeometry = true;
     this.scene.add(this.gridHelper);
 
+    // Player feet sit on the ground. The body model is attached once Nightfang loads.
+    // It is kept off the first-person camera layer so the view is from the eyes.
     // 3. Player: Bright Green Box + Directional Aim Barrel
     this.playerGroup = new THREE.Group();
     this.playerGroup.position.set(0, 0.9, 0);
@@ -194,6 +214,19 @@ export class ThreeTacticalWorld {
     this.playerMesh.castShadow = true;
     this.playerMesh.userData.ownsGeometry = true;
     this.playerGroup.add(this.playerMesh);
+ cursor/glb-character-models-59f4
+    this.barrelMesh = new THREE.Mesh(
+      new THREE.BoxGeometry(0.01, 0.01, 0.01),
+      new THREE.MeshBasicMaterial({ visible: false })
+    );
+
+    this.tacticalLight = new THREE.SpotLight(0xfff2cc, 0, 24, (18 * Math.PI) / 180, 0.45, 1);
+    this.tacticalLight.position.set(0.12, 1.48, 0.25);
+    this.tacticalLight.target.position.set(0, 1.4, 10);
+    this.tacticalLight.castShadow = false;
+    this.playerGroup.add(this.tacticalLight);
+    this.playerGroup.add(this.tacticalLight.target);
+
     this.sharedMaterials.push(playerMat);
 
     // Aim Barrel pointing in positive Z direction of local group
@@ -221,6 +254,7 @@ export class ThreeTacticalWorld {
     this.playerGroup.add(this.tacticalSpotTarget);
     this.tacticalSpot.target = this.tacticalSpotTarget;
     this.playerGroup.add(this.tacticalSpot);
+
 
     // God Mode Shield Ring
     const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
@@ -398,6 +432,48 @@ export class ThreeTacticalWorld {
       tower.userData.ownsGeometry = false;
       this.scene.add(tower);
     });
+
+    this.loadCharacterModels();
+  }
+
+  private loadCharacterModels(): void {
+    Promise.all([
+      this.gltfLoader.loadAsync(FRIENDLY_MODEL_URL),
+      this.gltfLoader.loadAsync(ENEMY_MODEL_URL),
+    ])
+      .then(([friendly, enemy]) => {
+        this.friendlyTemplate = fitModelToHitbox(friendly.scene, FRIENDLY_HITBOX);
+        this.enemyTemplate = fitModelToHitbox(enemy.scene, ENEMY_HITBOX);
+        this.characterLoadState = 'ready';
+        this.attachPlayerModel();
+      })
+      .catch((error: unknown) => {
+        this.characterLoadState = 'failed';
+        console.error('Failed to load character models from /models', error);
+      });
+  }
+
+  private attachCharacter(
+    group: THREE.Group,
+    template: THREE.Object3D | null,
+    createFallback: () => THREE.Object3D
+  ): void {
+    if (group.getObjectByName('character')) return;
+    if (this.characterLoadState === 'loading') return;
+
+    const character =
+      this.characterLoadState === 'ready' && template ? template.clone(true) : createFallback();
+    character.name = 'character';
+    group.add(character);
+  }
+
+  /** Same clone path as a friendly: the operator GLB fitted to the squad hitbox. */
+  private attachPlayerModel(): void {
+    if (!this.friendlyTemplate || this.playerGroup.getObjectByName('character')) return;
+
+    const character = this.friendlyTemplate.clone(true);
+    character.name = 'character';
+    this.playerGroup.add(character);
   }
 
   // --- PHYSICS ENGINE: CRATE MOMENTUM & DAMPING ---
@@ -482,6 +558,24 @@ export class ThreeTacticalWorld {
       let group = this.friendlyMeshes.get(friendly.id);
       if (!group) {
         group = new THREE.Group();
+        group.add(actor.pose);
+        group.userData.animator = actor.animator;
+        this.scene.add(group);
+        this.friendlyMeshes.set(friendly.id, group);
+      }
+      if (!group) return;
+
+      group.position.set(friendly.position.x, friendly.position.y || 0, friendly.position.z);
+      group.rotation.y = friendly.rotationY;
+      const speed = this.actorSpeed(group, friendly.position.x, friendly.position.z);
+      this.driveActor(
+        group,
+        speed,
+        speed > 5.4 || friendly.state === 'bounding',
+        friendly.shootCooldown,
+        friendly.state === 'suppress' || friendly.state === 'take_cover'
+      );
+
         const box = new THREE.Mesh(this.friendlyBodyGeo, this.friendlyBodyMat);
         box.castShadow = true;
         box.userData.ownsGeometry = false;
@@ -501,6 +595,7 @@ export class ThreeTacticalWorld {
       group.position.set(px, 0.75, pz);
       group.rotation.y = Number.isFinite(friendly.rotationY) ? friendly.rotationY : 0;
 
+
       if (friendly.status === 'KIA') {
         group.visible = false;
       } else {
@@ -512,6 +607,9 @@ export class ThreeTacticalWorld {
     this.dropMissing(this.friendlyMeshes, liveIds);
   }
 
+  public syncEnemies(enemies: EnemyCombatant[]): void {
+    enemies.forEach((enemy) => {
+
   // --- SYNC HOSTILE ENEMIES (RED SPHERES + COMMANDER CHEVRON) ---
   public syncEnemies(enemies: EnemyCombatant[] | null | undefined): void {
     const live = enemies ?? [];
@@ -520,29 +618,56 @@ export class ThreeTacticalWorld {
     live.forEach((enemy) => {
       if (!enemy?.id) return;
       liveIds.add(enemy.id);
+
       let group = this.enemyMeshes.get(enemy.id);
       if (!group) {
         group = new THREE.Group();
+        group.add(actor.pose);
+        group.userData.animator = actor.animator;
+
         const mesh = new THREE.Mesh(this.enemyBodyGeo, this.enemyBodyMat);
         mesh.castShadow = true;
         mesh.userData.ownsGeometry = false;
         group.add(mesh);
 
+
         if (enemy.isCommander) {
           const crown = new THREE.Mesh(this.commanderRingGeo, this.commanderRingMat);
           crown.rotation.x = Math.PI / 2;
+          crown.position.y = 1.95;
+
           crown.position.y = 1.25;
           crown.userData.ownsGeometry = false;
+
           group.add(crown);
         }
 
         this.scene.add(group);
         this.enemyMeshes.set(enemy.id, group);
       }
+      group.position.set(enemy.position.x, enemy.position.y || 0, enemy.position.z);
+      group.rotation.y = enemy.rotationY;
+      const speed = this.actorSpeed(group, enemy.position.x, enemy.position.z);
+      const sprinting =
+        speed > 5.2 ||
+        enemy.state === 'advance' ||
+        enemy.state === 'flank_left' ||
+        enemy.state === 'flank_right';
+      this.driveActor(
+        group,
+        speed,
+        sprinting,
+        enemy.shootCooldown ?? 0,
+        enemy.state === 'suppress' || enemy.state === 'overwatch'
+      );
+
+      if (enemy.health <= 0) {
+
 
       group.position.set(enemy.position?.x ?? 0, 1.0, enemy.position?.z ?? 0);
 
       if ((enemy.health ?? 0) <= 0) {
+
         group.visible = false;
       } else {
         group.scale.set(1, 1, 1);
