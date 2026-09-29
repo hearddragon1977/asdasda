@@ -269,14 +269,11 @@ export interface EnemyCombatant {
   isCommander?: boolean;
   burstCount?: number;
   burstRemaining?: number;
-<<<<<<< HEAD
   reloadTimer?: number;
   magazineSize?: number;
   stateTimer?: number;
   resumeState?: EnemyAction;
-=======
   loadout?: UnitLoadoutState;
->>>>>>> origin/main
 }
 
 export interface FriendlyCombatant {
@@ -298,10 +295,7 @@ export interface FriendlyCombatant {
   lastBark: string;
   lastBarkTime: number;
   currentAmmo: number;
-<<<<<<< HEAD
   reloadTimer?: number;
   magazineSize?: number;
-=======
   loadout?: UnitLoadoutState;
->>>>>>> origin/main
 }
