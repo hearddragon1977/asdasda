@@ -23,7 +23,6 @@ import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
-=======
 import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, switchWeaponSlot, syncWeaponIntoInventory } from './data/inventory.js';
 import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
 
