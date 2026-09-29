@@ -939,17 +939,23 @@
           obs.mesh.position.z = obs.pos.z;
         }
 
-        // Player Move & Physics Obstacle Collision
-        let mx = 0; let mz = 0;
-        if (keys['w'] || keys['arrowup']) mz -= 1;
-        if (keys['s'] || keys['arrowdown']) mz += 1;
-        if (keys['a'] || keys['arrowleft']) mx -= 1;
-        if (keys['d'] || keys['arrowright']) mx += 1;
+        // Player move relative to facing: W toward aim, S back, A left, D right.
+        let forward = 0;
+        let strafe = 0;
+        if (keys['w'] || keys['arrowup']) forward += 1;
+        if (keys['s'] || keys['arrowdown']) forward -= 1;
+        if (keys['a'] || keys['arrowleft']) strafe -= 1;
+        if (keys['d'] || keys['arrowright']) strafe += 1;
 
-        if (mx !== 0 || mz !== 0) {
-          const len = Math.hypot(mx, mz);
-          let nx = playerGroup.position.x + (mx / len) * 9.5 * dt;
-          let nz = playerGroup.position.z + (mz / len) * 9.5 * dt;
+        if (forward !== 0 || strafe !== 0) {
+          const yaw = playerGroup.rotation.y;
+          const sin = Math.sin(yaw);
+          const cos = Math.cos(yaw);
+          const wishX = sin * forward - cos * strafe;
+          const wishZ = cos * forward + sin * strafe;
+          const len = Math.hypot(wishX, wishZ) || 1;
+          let nx = playerGroup.position.x + (wishX / len) * 9.5 * dt;
+          let nz = playerGroup.position.z + (wishZ / len) * 9.5 * dt;
 
           const resolved = resolveCollisions({ x: nx, z: nz }, 1.0);
           playerGroup.position.x = Math.max(-42, Math.min(42, resolved.x));
