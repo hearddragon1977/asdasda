@@ -314,6 +314,8 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
     const handleMouseMove = (e: MouseEvent) => {
       if (document.pointerLockElement !== canvas || !worldRef.current) return;
+      // Browsers can report one huge jump right after the pointer locks; skip it.
+      if (Math.abs(e.movementX) > 300 || Math.abs(e.movementY) > 300) return;
       worldRef.current.applyLook(e.movementX, e.movementY);
     };
 
