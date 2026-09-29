@@ -7,11 +7,14 @@
 class TacticalAudioEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  /** Low-pass inserted between master and destination for suppression muffling. */
+  private muffleFilter: BiquadFilterNode | null = null;
   private tinnitusOsc: OscillatorNode | null = null;
   private tinnitusGain: GainNode | null = null;
   private heartbeatTimer: number | null = null;
   private breathingTimer: number | null = null;
   private isInitialized = false;
+  private tinnitusStopTimer: number | null = null;
 
   public setSuppressionMuffle(amount: number): void {
     const ctx = this.ensureContext();
@@ -27,11 +30,40 @@ class TacticalAudioEngine {
       this.ctx = new AudioCtx();
       this.masterGain = this.ctx.createGain();
       this.masterGain.gain.setValueAtTime(0.85, this.ctx.currentTime);
-      this.masterGain.connect(this.ctx.destination);
+
+      // Master → muffle (lowpass) → speakers. Cutoff drops under heavy fire.
+      this.muffleFilter = this.ctx.createBiquadFilter();
+      this.muffleFilter.type = 'lowpass';
+      this.muffleFilter.frequency.setValueAtTime(18000, this.ctx.currentTime);
+      this.muffleFilter.Q.setValueAtTime(0.7, this.ctx.currentTime);
+
+      this.masterGain.connect(this.muffleFilter);
+      this.muffleFilter.connect(this.ctx.destination);
       this.isInitialized = true;
     } catch {
       // AudioContext may require user interaction to unlock
     }
+  }
+
+  /**
+   * Apply combat-suppression audio muffling (0 = clear, 1 = heavy low-pass).
+   * Softens highs to simulate temporary auditory dulling under incoming fire.
+   */
+  public setSuppressionMuffle(amount: number): void {
+    const ctx = this.ensureContext();
+    if (!ctx || !this.muffleFilter) return;
+
+    const clamped = Math.max(0, Math.min(1, amount));
+    this.suppressionMuffle = clamped;
+    // 18 kHz (open) → ~450 Hz (heavily muffled)
+    const hz = 18000 * Math.pow(450 / 18000, clamped);
+    const t = ctx.currentTime;
+    this.muffleFilter.frequency.cancelScheduledValues(t);
+    this.muffleFilter.frequency.setTargetAtTime(hz, t, 0.05);
+  }
+
+  public getSuppressionMuffle(): number {
+    return this.suppressionMuffle;
   }
 
   private ensureContext(): AudioContext | null {
@@ -44,13 +76,31 @@ class TacticalAudioEngine {
     return this.ctx;
   }
 
+  private arm(source: AudioScheduledSourceNode, nodes: AudioNode[]): void {
+    source.addEventListener('ended', () => {
+      try {
+        source.disconnect();
+      } catch {
+        // Already detached.
+      }
+      for (const node of nodes) {
+        try {
+          node.disconnect();
+        } catch {
+          // Already detached.
+        }
+      }
+    });
+  }
+
   // --- WEAPON & BALLISTICS SFX ---
 
-  public playM4Fire(): void {
+  public playM4Fire(volumeScale = 1): void {
     const ctx = this.ensureContext();
     if (!ctx || !this.masterGain) return;
 
     const t = ctx.currentTime;
+    const vol = Math.max(0.05, Math.min(1.5, volumeScale));
 
     // 1. Initial transient crack (fast noise burst)
     const bufferSize = ctx.sampleRate * 0.05;
@@ -67,12 +117,13 @@ class TacticalAudioEngine {
     noiseFilter.frequency.setValueAtTime(1200, t);
 
     const noiseGain = ctx.createGain();
-    noiseGain.gain.setValueAtTime(0.9, t);
+    noiseGain.gain.setValueAtTime(0.9 * vol, t);
     noiseGain.gain.exponentialRampToValueAtTime(0.01, t + 0.04);
 
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
     noiseGain.connect(this.masterGain);
+    this.arm(noise, [noiseFilter, noiseGain]);
     noise.start(t);
 
     // 2. Punch / low-end explosive pressure
@@ -82,11 +133,12 @@ class TacticalAudioEngine {
     osc.frequency.exponentialRampToValueAtTime(35, t + 0.15);
 
     const oscGain = ctx.createGain();
-    oscGain.gain.setValueAtTime(0.9, t);
+    oscGain.gain.setValueAtTime(0.9 * vol, t);
     oscGain.gain.exponentialRampToValueAtTime(0.001, t + 0.22);
 
     osc.connect(oscGain);
     oscGain.connect(this.masterGain);
+    this.arm(osc, [oscGain]);
     osc.start(t);
     osc.stop(t + 0.25);
 
@@ -102,15 +154,16 @@ class TacticalAudioEngine {
 
     const revFilter = ctx.createBiquadFilter();
     revFilter.type = 'lowpass';
-    revFilter.frequency.setValueAtTime(2400, t);
+    revFilter.frequency.setValueAtTime(2400 * (0.4 + 0.6 * vol), t);
 
     const revGain = ctx.createGain();
-    revGain.gain.setValueAtTime(0.45, t);
-    revGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    revGain.gain.setValueAtTime(0.45 * vol, t);
+    revGain.gain.exponentialRampToValueAtTime(0.001, t + 0.45 * (0.5 + 0.5 * vol));
 
     revSource.connect(revFilter);
     revFilter.connect(revGain);
     revGain.connect(this.masterGain);
+    this.arm(revSource, [revFilter, revGain]);
     revSource.start(t);
   }
 
@@ -137,6 +190,7 @@ class TacticalAudioEngine {
     osc.connect(oscFilter);
     oscFilter.connect(gain);
     gain.connect(this.masterGain);
+    this.arm(osc, [oscFilter, gain]);
 
     osc.start(t);
     osc.stop(t + 0.35);
@@ -158,6 +212,7 @@ class TacticalAudioEngine {
 
     osc.connect(gain);
     gain.connect(this.masterGain);
+    this.arm(osc, [gain]);
     osc.start(t);
     osc.stop(t + 0.1);
   }
@@ -178,6 +233,7 @@ class TacticalAudioEngine {
 
     osc.connect(gain);
     gain.connect(this.masterGain);
+    this.arm(osc, [gain]);
     osc.start(t);
     osc.stop(t + 0.05);
   }
@@ -199,6 +255,7 @@ class TacticalAudioEngine {
 
     osc1.connect(gain1);
     gain1.connect(this.masterGain);
+    this.arm(osc1, [gain1]);
     osc1.start(t);
     osc1.stop(t + 0.1);
 
@@ -215,6 +272,7 @@ class TacticalAudioEngine {
 
     osc2.connect(gain2);
     gain2.connect(this.masterGain);
+    this.arm(osc2, [gain2]);
     osc2.start(t + 0.22);
     osc2.stop(t + 0.35);
   }
@@ -250,6 +308,7 @@ class TacticalAudioEngine {
 
       o1.connect(g1);
       g1.connect(this.masterGain);
+      this.arm(o1, [g1]);
       o1.start(t);
       o1.stop(t + 0.15);
 
@@ -266,6 +325,7 @@ class TacticalAudioEngine {
 
       o2.connect(g2);
       g2.connect(this.masterGain);
+      this.arm(o2, [g2]);
       o2.start(t + 0.18);
       o2.stop(t + 0.32);
     };
@@ -314,6 +374,7 @@ class TacticalAudioEngine {
       source.connect(filter);
       filter.connect(gain);
       gain.connect(this.masterGain);
+      this.arm(source, [filter, gain]);
       source.start(t);
 
       // If wheezing (tension pneumothorax), add high pitch pleural whistle
@@ -331,6 +392,7 @@ class TacticalAudioEngine {
 
         whistle.connect(whistleGain);
         whistleGain.connect(this.masterGain);
+        this.arm(whistle, [whistleGain]);
         whistle.start(t + 0.2);
         whistle.stop(t + 1.1);
       }
@@ -362,13 +424,18 @@ class TacticalAudioEngine {
     } else {
       if (this.tinnitusOsc && this.tinnitusGain) {
         this.tinnitusGain.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
-        setTimeout(() => {
+        if (this.tinnitusStopTimer) window.clearTimeout(this.tinnitusStopTimer);
+        this.tinnitusStopTimer = window.setTimeout(() => {
+          this.tinnitusStopTimer = null;
           try {
             this.tinnitusOsc?.stop();
             this.tinnitusOsc?.disconnect();
-            this.tinnitusOsc = null;
-            this.tinnitusGain = null;
-          } catch {}
+            this.tinnitusGain?.disconnect();
+          } catch {
+            // Oscillator already stopped.
+          }
+          this.tinnitusOsc = null;
+          this.tinnitusGain = null;
         }, 1600);
       }
     }
@@ -394,6 +461,7 @@ class TacticalAudioEngine {
 
       osc.connect(gain);
       gain.connect(this.masterGain);
+      this.arm(osc, [gain]);
       osc.start(clickTime);
       osc.stop(clickTime + 0.05);
     }
@@ -416,6 +484,7 @@ class TacticalAudioEngine {
 
     osc.connect(gain);
     gain.connect(this.masterGain);
+    this.arm(osc, [gain]);
     osc.start(t);
     osc.stop(t + 0.25);
   }
@@ -436,6 +505,7 @@ class TacticalAudioEngine {
 
     osc.connect(gain);
     gain.connect(this.masterGain);
+    this.arm(osc, [gain]);
     osc.start(t);
     osc.stop(t + 0.09);
   }
@@ -445,9 +515,31 @@ class TacticalAudioEngine {
     if (this.breathingTimer) clearInterval(this.breathingTimer);
     this.heartbeatTimer = null;
     this.breathingTimer = null;
+    if (this.tinnitusStopTimer) {
+      window.clearTimeout(this.tinnitusStopTimer);
+      this.tinnitusStopTimer = null;
+    }
     try {
       this.tinnitusOsc?.stop();
-    } catch {}
+      this.tinnitusOsc?.disconnect();
+      this.tinnitusGain?.disconnect();
+    } catch {
+      // Oscillator already stopped.
+    }
+    this.tinnitusOsc = null;
+    this.tinnitusGain = null;
+    try {
+      this.masterGain?.disconnect();
+    } catch {
+      // Master bus already detached.
+    }
+    const ctx = this.ctx;
+    this.ctx = null;
+    this.masterGain = null;
+    this.isInitialized = false;
+    if (ctx && ctx.state !== 'closed') {
+      ctx.close().catch(() => {});
+    }
   }
 }
 

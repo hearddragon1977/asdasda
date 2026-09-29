@@ -80,10 +80,12 @@ export class RosterManager {
     woundDescriptions: string[],
     extracted: boolean
   ): { status: 'active' | 'dia' | 'medically_discharged'; reason: string; awardPurpleHeart: boolean } {
-    this.activeOperator.injuriesSustained = [...woundDescriptions];
+    this.activeOperator.injuriesSustained = [...(woundDescriptions ?? [])];
+    const bloodVolume = vitals?.bloodVolume ?? 0;
+    const shockStage = vitals?.shockStage;
 
     // Permadeath (Dead In Action)
-    if (!extracted || vitals.shockStage === 'cardiac_arrest' || vitals.bloodVolume <= 1500) {
+    if (!extracted || shockStage === 'cardiac_arrest' || bloodVolume <= 1500) {
       this.activeOperator.status = 'dia';
       this.activeOperator.dischargeReason = 'Killed In Action (KIA) - Irreversible Hypovolemic Exsanguination / Cranial Breach';
       this.activeOperator.purpleHeartAwarded = true;
@@ -97,7 +99,7 @@ export class RosterManager {
     }
 
     // Extracted alive: Check for Permanent Medical Consequences
-    if (vitals.paralyzed) {
+    if (vitals?.paralyzed) {
       this.activeOperator.status = 'medically_discharged';
       this.activeOperator.dischargeReason = 'Permanent Honorable Medical Discharge - Bilateral Lower Extremity Paraplegia (Spinal Cord Severance)';
       this.activeOperator.purpleHeartAwarded = true;
@@ -110,7 +112,7 @@ export class RosterManager {
       };
     }
 
-    if (woundsCount >= 3 || vitals.bloodVolume < 3000) {
+    if (woundsCount >= 3 || bloodVolume < 3000) {
       this.activeOperator.status = 'medically_discharged';
       this.activeOperator.dischargeReason = 'Honorable Medical Discharge - Catastrophic Extremity Ischemia & Traumatic Vascular Rupture';
       this.activeOperator.purpleHeartAwarded = true;
