@@ -147,17 +147,29 @@ export interface InventoryState {
   ownedGearIds: string[];
   activeWeaponSlot: WeaponEquipSlot;
 }
-
 export interface WeaponAttachmentsState {
   opticId: string | null;
   flashlightId: string | null;
   muzzleId: string | null;
 }
 
+export interface EquipmentSlotsState {
+  vest: string | null;
+  helmet: string | null;
+  backpack: string | null;
+}
+
+export interface AttachmentSlotsState {
+  optic: string | null;
+  flashlight: string | null;
+  muzzle: string | null;
+}
+
+/** Snapshot of a unit's worn gear + rail devices for React / AI sync. */
 export interface UnitLoadoutState {
   unitId: string;
-  equipment: { vest: string | null; helmet: string | null; backpack: string | null };
-  attachments: { optic: string | null; flashlight: string | null; muzzle: string | null };
+  equipment: EquipmentSlotsState;
+  attachments: AttachmentSlotsState;
   inventory: { id: string; qty?: number }[];
   carriedWeightKg: number;
   capacityKg: number;

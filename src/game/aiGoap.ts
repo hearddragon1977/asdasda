@@ -173,9 +173,18 @@ export class GuerrillaAiDirector {
         currentAmmo: 30,
       },
     ];
+
+    // Register / refresh Bluefor equipment kits (vest / helmet / pack / rails)
     for (const friendly of this.friendlies) {
-      friendly.magazineSize = friendly.currentAmmo;
-      friendly.reloadTimer = 0;
+      const kit = equipmentManager.registerFriendly(friendly.id);
+      // Marksman gets ACOG; SAW gunner gets heavier ruck
+      if (friendly.id === 'cpl_ortiz') {
+        kit.equip('acog_ta31');
+      }
+      if (friendly.id === 'sgt_ruiz') {
+        kit.equip('molle_ruck_large');
+      }
+      friendly.loadout = kit.snapshot();
     }
   }
 
@@ -364,6 +373,19 @@ export class GuerrillaAiDirector {
     radioChatter.resetKind('contact');
     radioChatter.resetKind('squad_leader_casualty');
 
+    // Register OPFOR kits — commanders / flankers may draw suppressors
+    for (const enemy of this.enemies) {
+      const kit = equipmentManager.registerEnemy(enemy.id);
+      if (enemy.role.toLowerCase().includes('flank')) {
+        kit.equip('pbs1_suppressor');
+      }
+      if (enemy.role.toLowerCase().includes('marksman') || enemy.role.toLowerCase().includes('svd')) {
+        kit.equip('pso1');
+        kit.equip('6b47');
+      }
+      enemy.loadout = kit.snapshot();
+    }
+
     const approachText =
       approach === 'east_flank'
         ? 'INCOMING HOSTILES BREACHING EAST SECTOR!'
@@ -522,7 +544,12 @@ export class GuerrillaAiDirector {
     const enemy = this.enemies.find((e) => e.id === enemyId);
     if (!enemy || enemy.health <= 0) return false;
 
-    enemy.health -= damage;
+    // Plate / helmet mitigation from equipment system
+    const armor = equipmentManager.resolveArmorHit(enemyId, 'torso_heart', 0.55);
+    const applied = armor.stopped
+      ? Math.max(2, damage * (armor.bluntTrauma ? armor.bleedMultiplier : 0.15))
+      : damage;
+    enemy.health -= applied;
 
     if (enemy.health <= 0) {
       enemy.health = 0;
@@ -584,7 +611,11 @@ export class GuerrillaAiDirector {
     const friendly = this.friendlies.find((f) => f.id === friendlyId);
     if (!friendly || friendly.status === 'KIA') return false;
 
-    friendly.health -= damage;
+    const armor = equipmentManager.resolveArmorHit(friendlyId, 'torso_heart', 0.55);
+    const applied = armor.stopped
+      ? Math.max(2, damage * (armor.bluntTrauma ? armor.bleedMultiplier : 0.15))
+      : damage;
+    friendly.health -= applied;
     if (friendly.health <= 35 && friendly.status === 'ALIVE') {
       friendly.status = 'WIA';
       this.emitCallout({
