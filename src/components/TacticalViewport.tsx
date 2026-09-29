@@ -14,13 +14,18 @@ import { suppressionSystem } from '../systems/suppression.js';
 
 interface TacticalViewportProps {
   weapon: WeaponState;
+  activeWeaponSlot: WeaponEquipSlot;
+  hasPrimary: boolean;
+  hasSidearm: boolean;
   godMode: boolean;
   isPaused: boolean;
   onToggleGodMode: () => void;
   onUpdateWeapon: (updater: (prev: WeaponState) => WeaponState) => void;
+  onSwitchWeaponSlot: (slot: WeaponEquipSlot) => void;
   onToggleMap: () => void;
   onCallCasevac: () => void;
   onOpenRoster: () => void;
+  onOpenInventory: () => void;
   onOpenScoreboard: () => void;
   onOpenPauseMenu: () => void;
   onVitalsChanged: () => void;
@@ -35,13 +40,18 @@ interface TacticalViewportProps {
 
 export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   weapon,
+  activeWeaponSlot,
+  hasPrimary,
+  hasSidearm,
   godMode,
   isPaused,
   onToggleGodMode,
   onUpdateWeapon,
+  onSwitchWeaponSlot,
   onToggleMap,
   onCallCasevac,
   onOpenRoster,
+  onOpenInventory,
   onOpenScoreboard,
   onOpenPauseMenu,
   onVitalsChanged,
@@ -191,18 +201,23 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     };
   }, []);
 
-  // --- AUTHENTIC M4A1 RELOAD SYSTEM (1.8s TACTICAL RELOAD) ---
+  // --- TACTICAL RELOAD (duration from equipped weapon definition) ---
   const triggerReload = () => {
     const curWep = weaponRef.current;
-    const reserve = curWep.reserveRounds ?? 120;
-    if (curWep.isReloading || curWep.currentMagRounds >= 30 || reserve <= 0) return;
+    const def = getWeaponById(curWep.weaponId) ?? DEFAULT_PLAYER_WEAPON;
+    const capacity = def.magazineSize;
+    const reserve =
+      curWep.reserveRounds ??
+      curWep.reserveMags.reduce((sum, n) => sum + n, 0);
+    if (curWep.isReloading || curWep.currentMagRounds >= capacity || reserve <= 0) return;
 
     handlersRef.current.onUpdateWeapon((prev) => ({ ...prev, isReloading: true }));
     tacticalAudio.playMagCheck();
     setReloadProgress(0);
 
     const startTime = performance.now();
-    const duration = 1800; // 1.8 seconds
+    const duration =
+      (curWep.currentMagRounds <= 0 ? def.emptyReloadTimeSec : def.reloadTimeSec) * 1000;
 
     if (reloadTimerRef.current) clearInterval(reloadTimerRef.current);
 
@@ -224,6 +239,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             ...prev,
             currentMagRounds: prev.currentMagRounds + available,
             reserveRounds: Math.max(0, prevReserve - available),
+            chambered: true,
             isReloading: false,
           };
         });
@@ -231,14 +247,22 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     }, 30);
   };
 
-  // --- M4A1 CYCLIC FIRING (STRICT AMMO CHECK & ZERO INFINITE AMMO BUG) ---
-  const fireM4Round = () => {
+  // --- CYCLIC FIRING (rate & capacity from weapons database) ---
+  const fireEquippedRound = () => {
     const curWep = weaponRef.current;
     if (curWep.isReloading) return; // Strictly blocked during reload!
 
+    const slot = activeSlotRef.current;
+    const slotArmed =
+      (slot === 'primary' && hasPrimaryRef.current) ||
+      (slot === 'sidearm' && hasSidearmRef.current);
+    if (!slotArmed) {
+      tacticalAudio.playDryFire();
+      return;
+    }
+
     // Check actual magazine ammo
     if (curWep.currentMagRounds <= 0) {
-      // Empty magazine -> Dry fire click & trigger reload!
       tacticalAudio.playDryFire();
       triggerReload();
       return;
@@ -247,10 +271,18 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const world = worldRef.current;
     if (!world) return;
 
+    const def = getWeaponById(curWep.weaponId) ?? DEFAULT_PLAYER_WEAPON;
+    const isFullAuto =
+      def.fireModes.includes('auto') || def.fireModes.includes('burst');
+    if (!isFullAuto && semiAutoLatched.current) return;
+
+    const interval = isFullAuto
+      ? Math.max(75, getShotIntervalMs(def))
+      : 120;
     const now = performance.now();
-    // Balanced M4A1 fire rate: 110ms (~550 RPM) ensures fair combat parity
-    if (now - lastShotTime.current < 110) return;
+    if (now - lastShotTime.current < interval) return;
     lastShotTime.current = now;
+    if (!isFullAuto) semiAutoLatched.current = true;
 
     tacticalAudio.init();
     audioManager.init();
@@ -347,6 +379,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
       if (e.code === 'KeyR' || key === 'r') triggerReload();
       if (e.code === 'KeyM' || key === 'm') onToggleMap();
+      if (e.code === 'KeyI' || key === 'i') onOpenInventory();
+      if (e.code === 'Digit1' || key === '1') onSwitchWeaponSlot('primary');
+      if (e.code === 'Digit2' || key === '2') onSwitchWeaponSlot('sidearm');
       if (e.code === 'Digit9') onCallCasevac();
       if (e.code === 'KeyP' || key === 'p') onOpenRoster();
       if (e.code === 'KeyI' || key === 'i') onOpenInventoryRef.current?.();
@@ -390,7 +425,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       if (e.button === 0) {
         isMouseDown.current = true;
         updateAimFromEvent(e.clientX, e.clientY);
-        fireM4Round();
+        fireEquippedRound();
       }
       if (e.button === 2) {
         onUpdateWeapon((prev) => ({ ...prev, aimingDownSights: !prev.aimingDownSights }));
@@ -401,6 +436,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const handleMouseUp = (e: MouseEvent) => {
       if (e.button === 0) {
         isMouseDown.current = false;
+        semiAutoLatched.current = false;
       }
       if (e.button === 2) {
         syncWeaponFromEquipment(undefined, false);
@@ -426,7 +462,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       if (!isPausedRef.current) {
         // Continuous M4 Auto Fire if mouse held down
         if (isMouseDown.current) {
-          fireM4Round();
+          fireEquippedRound();
         }
 
         // 1. Update Anatomy if not in god mode
@@ -870,9 +906,48 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
       {/* Bottom Right Authentic Weapon HUD (Magazine & Ammo Counter) */}
       <div className="absolute bottom-4 right-4 z-20 bg-slate-950/90 backdrop-blur-md p-3.5 rounded border border-slate-800 font-mono text-xs flex flex-col gap-1.5 shadow-2xl min-w-[210px]">
+        <div className="flex gap-1 mb-0.5">
+          <button
+            type="button"
+            onClick={() => onSwitchWeaponSlot('primary')}
+            disabled={!hasPrimary}
+            className={`flex-1 py-0.5 text-[9px] font-bold border rounded-sm cursor-pointer ${
+              activeWeaponSlot === 'primary'
+                ? 'border-emerald-500 bg-emerald-950/50 text-emerald-300'
+                : hasPrimary
+                  ? 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500'
+                  : 'border-slate-800 bg-slate-950 text-slate-700 cursor-not-allowed'
+            }`}
+          >
+            [1] PRIMARY
+          </button>
+          <button
+            type="button"
+            onClick={() => onSwitchWeaponSlot('sidearm')}
+            disabled={!hasSidearm}
+            className={`flex-1 py-0.5 text-[9px] font-bold border rounded-sm cursor-pointer ${
+              activeWeaponSlot === 'sidearm'
+                ? 'border-emerald-500 bg-emerald-950/50 text-emerald-300'
+                : hasSidearm
+                  ? 'border-slate-700 bg-slate-900 text-slate-400 hover:border-slate-500'
+                  : 'border-slate-800 bg-slate-950 text-slate-700 cursor-not-allowed'
+            }`}
+          >
+            [2] SIDEARM
+          </button>
+        </div>
         <div className="flex justify-between items-center text-[10px] text-slate-400 uppercase border-b border-slate-800 pb-1">
-          <span className="font-bold text-slate-200">M4A1 CARBINE 5.56mm</span>
-          <span className="text-emerald-400 font-semibold">AUTO (800 RPM)</span>
+          <span className="font-bold text-slate-200">
+            {equippedWeapon.shortName.toUpperCase()} {equippedWeapon.caliber.split(' ')[0]}
+          </span>
+          <span className="text-emerald-400 font-semibold">
+            {(equippedWeapon.fireModes.includes('auto')
+              ? 'AUTO'
+              : equippedWeapon.fireModes[0]?.toUpperCase()) ?? 'SEMI'}
+            {equippedWeapon.fireRateRpm > 0
+              ? ` (${equippedWeapon.fireRateRpm} RPM)`
+              : ''}
+          </span>
         </div>
 
         {/* Magazine Count */}
@@ -880,21 +955,21 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           <div className="flex items-baseline gap-1">
             <span
               className={`text-2xl font-bold tabular-nums ${
-                weapon.currentMagRounds <= 5
+                weapon.currentMagRounds <= Math.max(1, Math.floor(magCapacity * 0.15))
                   ? 'text-red-500 animate-pulse'
-                  : weapon.currentMagRounds <= 12
+                  : weapon.currentMagRounds <= Math.max(2, Math.floor(magCapacity * 0.4))
                   ? 'text-amber-400'
                   : 'text-emerald-400'
               }`}
             >
               {weapon.currentMagRounds}
             </span>
-            <span className="text-slate-500 text-sm">/ 30</span>
+            <span className="text-slate-500 text-sm">/ {magCapacity}</span>
           </div>
 
           <div className="text-right">
             <span className="text-[10px] text-slate-400 block uppercase">RESERVE</span>
-            <span className="text-slate-200 font-bold tabular-nums">120 RDS</span>
+            <span className="text-slate-200 font-bold tabular-nums">{reserveDisplay} RDS</span>
           </div>
         </div>
 
@@ -902,7 +977,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         {weapon.isReloading ? (
           <div className="flex flex-col gap-1 mt-1">
             <div className="flex justify-between items-center text-[10px] text-amber-400 font-bold">
-              <span>RELOADING M4A1...</span>
+              <span>RELOADING {equippedWeapon.shortName.toUpperCase()}...</span>
               <span>{Math.round(reloadProgress)}%</span>
             </div>
             <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
@@ -971,7 +1046,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           <button
             onPointerDown={() => {
               isMouseDown.current = true;
-              fireM4Round();
+              fireEquippedRound();
             }}
             onPointerUp={() => {
               isMouseDown.current = false;
