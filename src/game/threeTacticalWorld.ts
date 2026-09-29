@@ -344,6 +344,8 @@ export class ThreeTacticalWorld {
 
   private attachLocalPlayerModel(template: THREE.Object3D): void {
     const { pose, animator } = mountNightfang(template);
+    // Keep our own body off the camera's layer so the view is from the eyes.
+    pose.traverse((obj) => obj.layers.set(this.localActorLayer));
     this.playerMesh.add(pose);
     this.playerAnimator = animator;
   }
@@ -491,20 +493,14 @@ export class ThreeTacticalWorld {
     const yaw = this.lookYaw;
     const sin = Math.sin(yaw);
     const cos = Math.cos(yaw);
-    const back = this.adsActive ? 1.05 : 2.45;
-    const side = this.adsActive ? 0.18 : 0.48;
-    const eye = this.adsActive ? 1.58 : 1.72;
-    this.camera.position.set(
-      feet.x - sin * back + cos * side + this.swayX * 0.04,
-      feet.y + eye,
-      feet.z - cos * back - sin * side + this.swayZ * 0.04
-    );
+    const eye = this.adsActive ? 1.58 : 1.62;
+    this.camera.position.set(feet.x + this.swayX * 0.04, feet.y + eye, feet.z + this.swayZ * 0.04);
     const cosPitch = Math.cos(this.lookPitch);
     const look = new THREE.Vector3(sin * cosPitch, Math.sin(this.lookPitch), cos * cosPitch);
-    const aimFrom = new THREE.Vector3(feet.x, feet.y + 1.5, feet.z);
     this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(aimFrom.clone().addScaledVector(look, 24));
-    this.aimPoint.copy(aimFrom).addScaledVector(look, 48);
+    this.camera.lookAt(this.camera.position.clone().add(look));
+    // Shots go where the crosshair points.
+    this.aimPoint.copy(this.camera.position).addScaledVector(look, 48);
     this.tacticalLight.target.position.set(0, 1.48 + Math.sin(this.lookPitch) * 6, Math.max(0.2, cosPitch) * 8);
   }
 
@@ -1340,11 +1336,11 @@ export class ThreeTacticalWorld {
       dir.set(Math.sin(this.lookYaw), 0, Math.cos(this.lookYaw));
     }
     dir.normalize();
-    const origin = this.playerGroup.position.clone();
-    origin.y += 1.35;
-    origin.addScaledVector(dir, 0.55);
+    // Fire along the crosshair from the eye, starting clear of the near plane.
+    const origin = this.camera.position.clone();
+    origin.addScaledVector(dir, 1.0);
 
-    const bGeo = new THREE.SphereGeometry(0.35, 12, 12);
+    const bGeo = new THREE.SphereGeometry(0.06, 8, 8);
     const bMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
     const mesh = new THREE.Mesh(bGeo, bMat);
     mesh.position.copy(origin);
