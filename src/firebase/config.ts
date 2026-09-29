@@ -62,7 +62,7 @@ export async function testConnection(): Promise<void> {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firebase configuration notice: Client is offline or initializing.');
+      return;
     }
   }
 }

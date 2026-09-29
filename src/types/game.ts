@@ -281,6 +281,10 @@ export interface EnemyCombatant {
   isCommander?: boolean;
   burstCount?: number;
   burstRemaining?: number;
+  reloadTimer?: number;
+  magazineSize?: number;
+  stateTimer?: number;
+  resumeState?: EnemyAction;
   loadout?: UnitLoadoutState;
 }
 
@@ -303,5 +307,7 @@ export interface FriendlyCombatant {
   lastBark: string;
   lastBarkTime: number;
   currentAmmo: number;
+  reloadTimer?: number;
+  magazineSize?: number;
   loadout?: UnitLoadoutState;
 }

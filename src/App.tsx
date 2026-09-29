@@ -121,6 +121,14 @@ function TacticalAppContent() {
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
   const [isPauseMenuOpen, setIsPauseMenuOpen] = useState(false);
+  const casevacTimers = useRef<number[]>([]);
+
+  useEffect(() => {
+    return () => {
+      casevacTimers.current.forEach((timerId) => window.clearTimeout(timerId));
+      casevacTimers.current = [];
+    };
+  }, []);
 
   // Toggle God Mode
   const handleToggleGodMode = useCallback(() => {
@@ -335,6 +343,12 @@ function TacticalAppContent() {
     if (casevac.status !== 'idle') return;
     tacticalAudio.init();
     tacticalAudio.playRadioSquelchChirp();
+    casevacTimers.current.forEach((timerId) => window.clearTimeout(timerId));
+    casevacTimers.current = [];
+    const queueCasevac = (delay: number, run: () => void) => {
+      const timerId = window.setTimeout(run, delay);
+      casevacTimers.current.push(timerId);
+    };
 
     setCasevac({
       status: 'calling',
@@ -344,7 +358,7 @@ function TacticalAppContent() {
       squadMembers: [],
     });
 
-    setTimeout(() => {
+    queueCasevac(2800, () => {
       tacticalAudio.playRadioSquelchChirp();
       setCasevac((prev) => ({
         ...prev,
@@ -353,9 +367,9 @@ function TacticalAppContent() {
         progress: 40,
         message: 'Dustoff-4 inbound. Marked LZ with green smoke flare! Keep perimeter clear.',
       }));
-    }, 2800);
+    });
 
-    setTimeout(() => {
+    queueCasevac(6000, () => {
       tacticalAudio.playRadioSquelchChirp();
       setCasevac((prev) => ({
         ...prev,
@@ -363,9 +377,9 @@ function TacticalAppContent() {
         progress: 70,
         message: 'Dustoff-4 boots on ground! Security team laying down suppressive fire. Medic moving to casualty!',
       }));
-    }, 6000);
+    });
 
-    setTimeout(() => {
+    queueCasevac(9500, () => {
       tacticalAudio.playRadioSquelchChirp();
       const outcome = rosterManager.processCasualtyOutcome(
         anatomySim.vitals,
@@ -475,7 +489,7 @@ function TacticalAppContent() {
           user.uid
         ).catch(() => {});
       }
-    }, 9500);
+    });
   };
 
   const handleConfirmCasualtyOutcome = () => {
