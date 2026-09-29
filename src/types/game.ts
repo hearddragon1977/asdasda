@@ -60,12 +60,93 @@ export interface MedicalKit {
   splints: number;
 }
 
-/** Body-worn tactical gear slots (src/data/gear.js + src/systems/equipment.js). */
-export type EquipmentSlot = 'vest' | 'helmet' | 'backpack';
-/** Weapon rail attachment slots. */
+export type WeaponFaction = 'US' | 'Coalition' | 'OPFOR';
+export type WeaponCategory =
+  | 'carbine'
+  | 'assault_rifle'
+  | 'battle_rifle'
+  | 'dmr'
+  | 'sniper'
+  | 'lmg'
+  | 'gpmg'
+  | 'smg'
+  | 'pistol';
+export type FireMode = 'semi' | 'burst' | 'auto' | 'bolt';
+export type WeaponEquipSlot = 'primary' | 'sidearm';
+export type GearSlot = 'helmet' | 'vest' | 'backpack';
+export type EquipmentSlot = WeaponEquipSlot | GearSlot;
 export type AttachmentSlot = 'optic' | 'flashlight' | 'muzzle';
 export type GearReticle = 'iron' | 'red_dot' | 'holo' | 'lpvo' | 'acog' | 'scope';
 
+export interface DamageScaling {
+  baseDamage: number;
+  minDamage: number;
+  falloffStartM: number;
+  falloffEndM: number;
+  headMultiplier: number;
+  limbMultiplier: number;
+  armorPenetration: number;
+}
+
+export interface WeaponDefinition {
+  id: string;
+  name: string;
+  shortName: string;
+  faction: WeaponFaction;
+  category: WeaponCategory;
+  caliber: string;
+  cartridge: string;
+  muzzleVelocity: number;
+  effectiveRange: number;
+  maxRange: number;
+  fireRateRpm: number;
+  fireModes: FireMode[];
+  magazineSize: number;
+  defaultReserveMags: number;
+  reloadTimeSec: number;
+  emptyReloadTimeSec: number;
+  weightKg: number;
+  barrelLengthMm: number;
+  damage: DamageScaling;
+  equippable: boolean;
+  era: string;
+  description: string;
+  aliases?: string[];
+}
+
+export interface GearDefinition {
+  id: string;
+  name: string;
+  shortName: string;
+  slot: GearSlot;
+  faction: WeaponFaction | 'Universal';
+  weightKg: number;
+  protection: number;
+  ammoBonusMags?: number;
+  mobilityPenalty?: number;
+  equippable: boolean;
+  era?: string;
+  description: string;
+}
+
+export interface WeaponLoadoutState {
+  weaponId: string;
+  currentMagRounds: number;
+  chambered: boolean;
+  reserveMags: number[];
+  reserveRounds: number;
+}
+
+export interface InventoryState {
+  primary: WeaponLoadoutState | null;
+  sidearm: WeaponLoadoutState | null;
+  helmetId: string | null;
+  vestId: string | null;
+  backpackId: string | null;
+  ownedWeaponIds: string[];
+  ownedGearIds: string[];
+  activeWeaponSlot: WeaponEquipSlot;
+}
 export interface WeaponAttachmentsState {
   opticId: string | null;
   flashlightId: string | null;
@@ -97,6 +178,7 @@ export interface UnitLoadoutState {
 }
 
 export interface WeaponState {
+  weaponId?: string;
   currentMagRounds: number; // max 30
   chambered: boolean;
   reserveMags: number[]; // e.g. [30, 28, 15, 0]
@@ -108,19 +190,12 @@ export interface WeaponState {
   tacticalLaser: boolean;
   tacticalLight: boolean;
   dryFired: boolean;
-  /** Rail attachments from equipment system (optic / light / muzzle). */
   attachments?: WeaponAttachmentsState;
-  /** ADS zoom multiplier sourced from equipped optic. */
   adsZoom?: number;
-  /** Reticle behaviour key from equipped optic. */
   reticle?: GearReticle | string;
-  /** Relative muzzle blast loudness (suppressor < 1). */
   soundSignature?: number;
-  /** Relative muzzle flash scale (suppressor ≈ 0). */
   muzzleFlashScale?: number;
-  /** AI / spatial-audio hearing radius multiplier. */
   hearingRangeMul?: number;
-  /** True when a suppressor muzzle device is mounted. */
   isSuppressed?: boolean;
 }
 
@@ -206,7 +281,6 @@ export interface EnemyCombatant {
   isCommander?: boolean;
   burstCount?: number;
   burstRemaining?: number;
-  /** Optional equipment loadout id mirror (managed by equipmentManager). */
   loadout?: UnitLoadoutState;
 }
 
@@ -229,6 +303,5 @@ export interface FriendlyCombatant {
   lastBark: string;
   lastBarkTime: number;
   currentAmmo: number;
-  /** Optional equipment loadout id mirror (managed by equipmentManager). */
   loadout?: UnitLoadoutState;
 }
