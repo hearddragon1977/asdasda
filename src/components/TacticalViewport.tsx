@@ -27,7 +27,6 @@ interface TacticalViewportProps {
   onFriendlyDown: (friendlyId: string, killerId: string) => void;
   onPlayerPositionChanged?: (pos: { x: number; z: number; rotationY: number }) => void;
   onSquadStateChanged?: (friendlies: FriendlyCombatant[], enemies: EnemyCombatant[]) => void;
-  onOpenInventory?: () => void;
   loadoutOpen?: boolean;
   onCityMapImage?: (dataUrl: string) => void;
 }
@@ -48,7 +47,6 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   onFriendlyDown,
   onPlayerPositionChanged,
   onSquadStateChanged,
-  onOpenInventory,
   loadoutOpen = false,
   onCityMapImage,
 }) => {
@@ -63,10 +61,8 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
   // Sync weapon ref to avoid stale closure in simulation loop and event listeners
   const weaponRef = useRef<WeaponState>(weapon);
-  const onOpenInventoryRef = useRef(onOpenInventory);
   const loadoutOpenRef = useRef(loadoutOpen);
   const suppressionVeilRef = useRef<HTMLDivElement>(null);
-  onOpenInventoryRef.current = onOpenInventory;
   loadoutOpenRef.current = loadoutOpen;
   // The world is built once; the loop and listeners read current props from here.
   const liveRef = useRef({
@@ -288,7 +284,6 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       if (e.code === 'KeyR' || key === 'r') triggerReload();
       if (e.code === 'Digit9') liveRef.current.onCallCasevac();
       if (e.code === 'KeyP' || key === 'p') liveRef.current.onOpenRoster();
-      if (e.code === 'KeyI' || key === 'i') onOpenInventoryRef.current?.();
       if (e.code === 'KeyV' || key === 'v') {
         onUpdateWeapon((prev) => ({ ...prev, aimingDownSights: !prev.aimingDownSights }));
       }

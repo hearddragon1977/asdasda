@@ -95,6 +95,8 @@ function TacticalAppContent() {
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
   const [isPauseMenuOpen, setIsPauseMenuOpen] = useState(false);
+  const overlaysLive = useRef({ isInventoryOpen, isRosterOpen, isScoreboardOpen, isMapOpen });
+  overlaysLive.current = { isInventoryOpen, isRosterOpen, isScoreboardOpen, isMapOpen };
 
   // Toggle God Mode
   const handleToggleGodMode = useCallback(() => {
@@ -117,7 +119,8 @@ function TacticalAppContent() {
     setIsInventoryOpen(true);
   }, []);
 
-  // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'Escape' for Pause
+  // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'I' for inventory,
+  // 'Escape' closes the topmost panel (inventory, roster, scoreboard, map) or else toggles pause
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
       if (e.key === 'g' || e.key === 'G') {
@@ -136,6 +139,11 @@ function TacticalAppContent() {
         setIsMapOpen((prev) => !prev);
       }
       if (e.key === 'Escape') {
+        const open = overlaysLive.current;
+        if (open.isInventoryOpen) return setIsInventoryOpen(false);
+        if (open.isRosterOpen) return setIsRosterOpen(false);
+        if (open.isScoreboardOpen) return setIsScoreboardOpen(false);
+        if (open.isMapOpen) return setIsMapOpen(false);
         setIsPauseMenuOpen((prev) => {
           const next = !prev;
           setIsPaused(next);
@@ -143,8 +151,8 @@ function TacticalAppContent() {
         });
       }
       if (e.key === 'i' || e.key === 'I') {
-        setInventory(syncWeaponIntoInventory(inventoryLive.current, weaponLive.current));
-        setIsInventoryOpen(true);
+        if (overlaysLive.current.isInventoryOpen) setIsInventoryOpen(false);
+        else openInventory();
       }
       if (e.key === '1' || e.key === '2') {
         const swapped = switchWeaponSlot(
@@ -157,7 +165,7 @@ function TacticalAppContent() {
     };
     window.addEventListener('keydown', handleGlobalKey);
     return () => window.removeEventListener('keydown', handleGlobalKey);
-  }, [handleToggleGodMode, applyLoadout]);
+  }, [handleToggleGodMode, applyLoadout, openInventory]);
 
   // Firebase Real-time Synchronization
   useEffect(() => {
@@ -559,7 +567,6 @@ function TacticalAppContent() {
           onFriendlyDown={handleFriendlyDown}
           onPlayerPositionChanged={setPlayerPos}
           onSquadStateChanged={handleSquadSync}
-          onOpenInventory={openInventory}
           loadoutOpen={isInventoryOpen}
           onCityMapImage={setCityMapImage}
         />
