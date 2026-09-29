@@ -6,9 +6,8 @@ interface PauseMenuModalProps {
   onOpenScoreboard: () => void;
   onOpenMap: () => void;
   onOpenRoster: () => void;
-  onOpenInventory: () => void;
-  onCallCasevac: () => void;
   onOpenInventory?: () => void;
+  onCallCasevac: () => void;
   onRestartMission: () => void;
   godMode: boolean;
   onToggleGodMode: () => void;
@@ -22,7 +21,6 @@ export const PauseMenuModal: React.FC<PauseMenuModalProps> = ({
   onOpenRoster,
   onOpenInventory,
   onCallCasevac,
-  onOpenInventory,
   onRestartMission,
   godMode,
   onToggleGodMode,

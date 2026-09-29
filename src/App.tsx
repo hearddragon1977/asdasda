@@ -23,11 +23,11 @@ import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
-=======
 import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, switchWeaponSlot, syncWeaponIntoInventory } from './data/inventory.js';
 import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
 
 import { equipmentManager, playerEquipment } from './systems/equipment.js';
+import { suppressionSystem } from './systems/suppression.js';
 
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
@@ -37,14 +37,6 @@ import {
   subscribeToCasualtyReports,
   subscribeToUserOperators,
 } from './firebase/firestoreService';
-import { getWeaponById } from './data/weapons.js';
-import {
-  createDefaultInventory,
-  getActiveWeaponState,
-  replenishInventoryAmmo,
-  switchWeaponSlot,
-  syncWeaponIntoInventory,
-} from './data/inventory.js';
 
 function TacticalAppContent() {
   const { user, signInWithGoogle } = useAuth();
@@ -143,9 +135,6 @@ function TacticalAppContent() {
   // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'Escape' for Pause
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
       if (e.key === 'g' || e.key === 'G') {
         handleToggleGodMode();
       }
@@ -159,27 +148,9 @@ function TacticalAppContent() {
         });
       }
       if (e.key === 'm' || e.key === 'M') {
-        if (!isInventoryOpen) setIsMapOpen((prev) => !prev);
-      }
-      if (e.key === 'i' || e.key === 'I') {
-        e.preventDefault();
-        if (isInventoryOpen) {
-          closeInventory();
-        } else {
-          openInventory();
-        }
-      }
-      if (e.key === '1' && !isInventoryOpen && !isPauseMenuOpen) {
-        handleSwitchWeaponSlot('primary');
-      }
-      if (e.key === '2' && !isInventoryOpen && !isPauseMenuOpen) {
-        handleSwitchWeaponSlot('sidearm');
+        setIsMapOpen((prev) => !prev);
       }
       if (e.key === 'Escape') {
-        if (isInventoryOpen) {
-          closeInventory();
-          return;
-        }
         setIsPauseMenuOpen((prev) => {
           const next = !prev;
           setIsPaused(next);
@@ -277,7 +248,6 @@ function TacticalAppContent() {
     const enemyName = enemy ? `${enemy.callsign}` : 'hostile';
 
     if (shooterId === 'player') {
-      const gun = getWeaponById(weaponRef.current.weaponId);
       setPlayerKills((prev) => prev + 1);
       setKillFeed((prev) => [
         ...prev,
@@ -566,13 +536,6 @@ function TacticalAppContent() {
           )}
 
           <button
-            onClick={openInventory}
-            className="px-2.5 py-1 text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
-          >
-            GEAR [I]
-          </button>
-
-          <button
             onClick={() => setIsMapOpen(true)}
             className="px-2.5 py-1 text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
           >
@@ -602,18 +565,13 @@ function TacticalAppContent() {
       <main className="relative flex-1 w-full h-full overflow-hidden">
         <TacticalViewport
           weapon={weapon}
-          activeWeaponSlot={inventory.activeWeaponSlot}
-          hasPrimary={!!inventory.primary}
-          hasSidearm={!!inventory.sidearm}
           godMode={godMode}
           isPaused={isPaused}
           onToggleGodMode={handleToggleGodMode}
           onUpdateWeapon={setWeapon}
-          onSwitchWeaponSlot={handleSwitchWeaponSlot}
           onToggleMap={() => setIsMapOpen((prev) => !prev)}
           onCallCasevac={handleCallCasevac}
           onOpenRoster={() => setIsRosterOpen(true)}
-          onOpenInventory={openInventory}
           onOpenScoreboard={() => setIsScoreboardOpen(true)}
           onOpenPauseMenu={() => {
             setIsPauseMenuOpen(true);
@@ -649,7 +607,6 @@ function TacticalAppContent() {
           enemies={enemies}
           currentWave={currentWave}
           killFeed={killFeed}
-          equippedWeaponName={getWeaponById(weapon.weaponId)?.shortName ?? 'Unarmed'}
         />
 
         {/* Real Live Topographic Sector Map Modal */}
@@ -671,10 +628,6 @@ function TacticalAppContent() {
           onOpenScoreboard={() => setIsScoreboardOpen(true)}
           onOpenMap={() => setIsMapOpen(true)}
           onOpenRoster={() => setIsRosterOpen(true)}
-          onOpenInventory={() => {
-            setIsPauseMenuOpen(false);
-            openInventory();
-          }}
           onCallCasevac={handleCallCasevac}
           onRestartMission={() => {
             setIsPauseMenuOpen(false);
@@ -696,15 +649,6 @@ function TacticalAppContent() {
         <InventoryModal
           isOpen={isInventoryOpen}
           onClose={() => setIsInventoryOpen(false)}
-          inventory={inventory}
-          weapon={weapon}
-          onChangeLoadout={applyLoadout}
-        />
-
-        {/* Equippable loadout: primary / sidearm / helmet / vest / backpack */}
-        <InventoryModal
-          isOpen={isInventoryOpen}
-          onClose={closeInventory}
           inventory={inventory}
           weapon={weapon}
           onChangeLoadout={applyLoadout}
