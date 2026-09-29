@@ -583,6 +583,7 @@ function TacticalAppContent() {
           enemies={enemies}
           currentWave={currentWave}
           killFeed={killFeed}
+          equippedWeaponName={(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).shortName}
         />
 
         {/* Real Live Topographic Sector Map Modal */}

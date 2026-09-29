@@ -12,6 +12,7 @@ interface ScoreboardModalProps {
   enemies: EnemyCombatant[];
   currentWave: number;
   killFeed: string[];
+  equippedWeaponName?: string;
 }
 
 export const ScoreboardModal: React.FC<ScoreboardModalProps> = ({
@@ -25,6 +26,7 @@ export const ScoreboardModal: React.FC<ScoreboardModalProps> = ({
   enemies,
   currentWave,
   killFeed,
+  equippedWeaponName = 'Unarmed',
 }) => {
   if (!isOpen) return null;
 
@@ -110,7 +112,9 @@ export const ScoreboardModal: React.FC<ScoreboardModalProps> = ({
                 <span>{activeOperator.rank} {activeOperator.name}</span>
                 <span className="text-[11px] text-sky-400">"{activeOperator.callsign}" (YOU)</span>
               </div>
-              <div className="col-span-3 text-slate-300 text-[11px]">Point Man / Operator (M4A1)</div>
+              <div className="col-span-3 text-slate-300 text-[11px]">
+                Point Man / Operator ({equippedWeaponName})
+              </div>
               <div className="col-span-1 text-center font-bold text-emerald-400">{playerKills}</div>
               <div className="col-span-1 text-center text-slate-400">{playerDeaths}</div>
               <div className="col-span-2 text-right">

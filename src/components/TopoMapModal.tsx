@@ -105,7 +105,7 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
 
       // Draw Hostile Enemies (RED BLIPS)
       enemies.forEach((enemy) => {
-        if (enemy.health <= 0) return;
+        if (!enemy?.position || enemy.health <= 0) return;
         const ex = toCanvasX(enemy.position.x);
         const ey = toCanvasY(enemy.position.z);
 
@@ -129,7 +129,7 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
 
       // Draw Friendly AI Operators (BLUE BLIPS)
       friendlies.forEach((friendly) => {
-        if (friendly.status === 'KIA') return;
+        if (!friendly?.position || friendly.status === 'KIA') return;
         const fx = toCanvasX(friendly.position.x);
         const fy = toCanvasY(friendly.position.z);
 
