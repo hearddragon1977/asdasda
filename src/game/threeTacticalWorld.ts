@@ -695,9 +695,14 @@ export class ThreeTacticalWorld {
 
   public render(
     dt: number,
+    onPlayerHit: (shooterId: string, damageScale?: number) => void,
+    onFriendlyHit: (friendlyId: string, shooterId: string, damageScale?: number) => void,
+    onEnemyHit: (enemyId: string, shooterId: string, damageScale?: number) => void
+
     onPlayerHit: (shooterId: string) => void,
     onFriendlyHit: (friendlyId: string, shooterId: string) => void,
     onEnemyHit: (enemyId: string, shooterId: string) => void
+
   ): void {
     this.playerAnimator?.update(dt);
     this.friendlyMeshes.forEach((group) => {
@@ -744,8 +749,20 @@ export class ThreeTacticalWorld {
         }
       }
 
+      if (this.city?.ready && this.city.blocksSegment(segmentStart, p.mesh.position, 0.05)) {
+        if (!p.isBluefor) {
+          suppressionSystem.registerWorldImpact(
+            { x: p.mesh.position.x, z: p.mesh.position.z },
+            { x: this.playerGroup.position.x, z: this.playerGroup.position.z }
+          );
+        }
+        this.scene.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        this.projectiles.splice(i, 1);
+
       if (bulletAbsorbed) {
         this.retireProjectile(i);
+
         continue;
       }
 

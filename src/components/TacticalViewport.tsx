@@ -4,6 +4,7 @@ import { ThreeTacticalWorld } from '../game/threeTacticalWorld';
 import { anatomySim } from '../game/anatomySimulation';
 import { aiDirector } from '../game/aiGoap';
 import { tacticalAudio } from '../audio/tacticalAudio';
+import { suppressionSystem } from '../systems/suppression.js';
 import { EnemyCombatant, FriendlyCombatant, WeaponState } from '../types/game';
 import { DEFAULT_PLAYER_WEAPON, getProjectileSpeed, getShotIntervalMs, getWeaponById } from '../data/weapons.js';
 import { audioManager } from '../systems/audio.js';
@@ -130,6 +131,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   // Combat wave banner notification
   const [waveBanner, setWaveBanner] = useState<string | null>(null);
   const [combatBarkBanner, setCombatBarkBanner] = useState<{ speaker: string; text: string; isBluefor: boolean } | null>(null);
+
+  // Suppression / stress sensory feedback (blur intensity + heavy-fire flag)
+  const [suppressionBlur, setSuppressionBlur] = useState(0);
+  const [underHeavyFire, setUnderHeavyFire] = useState(false);
+  const lastSuppressionUiSync = useRef(0);
 
   const [isMobile, setIsMobile] = useState<boolean>(false);
 
@@ -276,8 +282,15 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       currentMagRounds: Math.max(0, prev.currentMagRounds - 1),
     }));
 
+    world.shootPlayerBullet(world.aimPoint, {
+      speed: getProjectileSpeed(def),
+      muzzleVelocity: def.muzzleVelocity,
+      velocity: Math.max(80, def.muzzleVelocity - (fx.velocityLossMps ?? 0)),
+    });
+
     // Shoot player bullet towards mouse aim
     world.shootPlayerBullet(world.aimPoint);
+
   };
 
   useEffect(() => {
@@ -288,6 +301,18 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
     world.setGodMode(godMode);
+    let mapLoadActive = true;
+    setMapStatus('loading');
+    world.onMapReady = (layout) => {
+      if (!mapLoadActive) return;
+      aiDirector.relocateToCity(layout);
+      setMapStatus('ready');
+    };
+    world.onMapFailed = () => {
+      if (!mapLoadActive) return;
+      setMapStatus('error');
+    };
+
 
     // Seed weapon attachment fields from default player kit
     const seeded = playerEquipment.applyToWeaponState(weaponRef.current) as WeaponState;
@@ -300,6 +325,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       coneAngleDeg: fx0.lightConeAngleDeg,
       color: fx0.lightColor,
     });
+
 
     const initialWidth = containerRef.current.clientWidth || window.innerWidth;
     const initialHeight = containerRef.current.clientHeight || (window.innerHeight - 48);
@@ -503,13 +529,33 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             if (killed) {
               handlersRef.current.onEnemyEliminated(enemyId, shooterId);
             }
+          },
+          (impactPos, isBluefor) => {
+            // Nearby cover / terrain impacts from hostile fire rattle the player
+            if (!isBluefor) {
+              suppressionSystem.registerWorldImpact(impactPos, {
+                x: world.playerGroup.position.x,
+                z: world.playerGroup.position.z,
+              });
+            }
           }
         );
+
+        const stress = suppressionSystem.update(dt);
+        tacticalAudio.setSuppressionMuffle(stress.muffle);
+        world.applySuppressionSway(stress.swayOffsetX, stress.swayOffsetZ);
+        if (suppressionVeilRef.current) {
+          suppressionVeilRef.current.style.opacity = stress.blurPx > 0.4 ? '1' : '0';
+          suppressionVeilRef.current.style.backdropFilter = `blur(${stress.blurPx.toFixed(1)}px)`;
+        }
+
+=======
 
         // Render Live Mini-Radar
         renderMiniRadar(world.playerGroup.position, world.playerGroup.rotation.y);
       } else {
         world.render(0, () => {}, () => {}, () => {});
+        tacticalAudio.setSuppressionMuffle(0);
       }
 
       animFrame = requestAnimationFrame(loop);
@@ -731,6 +777,21 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         ref={containerRef}
         className="w-full h-full absolute inset-0 cursor-crosshair"
       />
+
+      {/* Suppression: backdrop blur + vignette (blurs the canvas underneath) */}
+      {suppressionBlur > 0.05 && (
+        <div
+          className="absolute inset-0 pointer-events-none z-[5] transition-[backdrop-filter,opacity] duration-75"
+          style={{
+            backdropFilter: `blur(${suppressionBlur.toFixed(2)}px)`,
+            WebkitBackdropFilter: `blur(${suppressionBlur.toFixed(2)}px)`,
+            background: underHeavyFire
+              ? 'radial-gradient(circle at center, rgba(15,23,42,0.05) 28%, rgba(15, 23, 42, 0.45) 72%, rgba(2, 6, 23, 0.82) 100%)'
+              : `radial-gradient(circle at center, transparent 42%, rgba(15, 23, 42, ${Math.min(0.5, 0.12 + suppressionBlur * 0.06)}) 100%)`,
+          }}
+          aria-hidden
+        />
+      )}
 
       {/* Top Left Quick Indicator Bar */}
       <div className="absolute top-4 left-4 z-20 flex items-center gap-3 bg-slate-950/85 backdrop-blur-md px-3.5 py-1.5 rounded border border-slate-800 text-xs font-mono text-slate-300">
