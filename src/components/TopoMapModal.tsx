@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
-import { tacticalLayout } from '../systems/mapGenerator';
 
 interface TopoMapModalProps {
   isOpen: boolean;
@@ -71,51 +70,31 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
       ctx.lineWidth = 2;
       ctx.strokeRect(toCanvasX(-45), toCanvasY(-45), (90 / 100) * w, (90 / 100) * h);
 
-      const blueSpawn = tacticalLayout?.spawns?.find((spawn) => spawn.faction === 'bluefor');
-      ctx.strokeStyle = 'rgba(56, 189, 248, 0.28)';
-      ctx.setLineDash([3, 5]);
-      ctx.lineWidth = 1;
-      for (const spawn of tacticalLayout?.spawns ?? []) {
-        if (!spawn || spawn.faction !== 'opfor' || !blueSpawn) continue;
-        ctx.beginPath();
-        ctx.moveTo(toCanvasX(blueSpawn.position.x), toCanvasY(blueSpawn.position.z));
-        ctx.lineTo(toCanvasX(spawn.position.x), toCanvasY(spawn.position.z));
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
+      // Real Compound Obstacles & Cover Landmarks
+      ctx.fillStyle = '#334155';
+      ctx.strokeStyle = '#64748b';
+      ctx.lineWidth = 1.5;
 
-      ctx.font = '10px monospace';
-      for (const placement of tacticalLayout?.placements ?? []) {
-        if (!placement?.position || !placement.size) continue;
-        const swapped = Math.abs(Math.sin(placement.rotationY || 0)) > 0.5;
-        const pw = ((swapped ? placement.size.z : placement.size.x) / 100) * w;
-        const ph = ((swapped ? placement.size.x : placement.size.z) / 100) * h;
-        const px = toCanvasX(placement.position.x) - pw / 2;
-        const py = toCanvasY(placement.position.z) - ph / 2;
-        ctx.fillStyle = placement.kind === 'ruined_brick'
-          ? '#9a3412'
-          : placement.kind === 'shipping_container'
-          ? '#c2410c'
-          : placement.kind === 'trench'
-          ? '#3f6212'
-          : placement.kind === 'crate'
-          ? '#d97706'
-          : '#64748b';
-        ctx.fillRect(px, py, pw, ph);
-        ctx.strokeStyle = '#cbd5e1';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(px, py, pw, ph);
-      }
-
+      // Northern Bunker (Z = -32)
+      ctx.fillRect(toCanvasX(-12), toCanvasY(-36), (24 / 100) * w, (8 / 100) * h);
+      ctx.strokeRect(toCanvasX(-12), toCanvasY(-36), (24 / 100) * w, (8 / 100) * h);
       ctx.fillStyle = '#94a3b8';
-      for (const spawn of tacticalLayout?.spawns ?? []) {
-        if (!spawn?.position) continue;
-        ctx.fillStyle = spawn.faction === 'bluefor' ? '#34d399' : '#fca5a5';
-        ctx.fillText(spawn.label, toCanvasX(spawn.position.x) + 4, toCanvasY(spawn.position.z) - 4);
-      }
-
-      // Southern extraction lane
       ctx.font = '10px monospace';
+      ctx.fillText('NORTH BUNKER COMPLEX', toCanvasX(-10), toCanvasY(-38));
+
+      // Berms (West & East)
+      ctx.fillStyle = '#334155';
+      ctx.fillRect(toCanvasX(-22), toCanvasY(-12), (12 / 100) * w, (4 / 100) * h);
+      ctx.fillRect(toCanvasX(10), toCanvasY(-12), (12 / 100) * w, (4 / 100) * h);
+      ctx.fillText('WEST BERM', toCanvasX(-22), toCanvasY(-14));
+      ctx.fillText('EAST BERM', toCanvasX(10), toCanvasY(-14));
+
+      // Center Supply Crates (Z = -16)
+      ctx.fillStyle = '#57534e';
+      ctx.fillRect(toCanvasX(-6), toCanvasY(-18), (12 / 100) * w, (4 / 100) * h);
+      ctx.fillText('CENTER CRATES', toCanvasX(-5), toCanvasY(-19));
+
+      // Southern Sandbag Line & Extraction LZ Dustoff (Z = 20)
       ctx.strokeStyle = '#059669';
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
@@ -126,7 +105,7 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
 
       // Draw Hostile Enemies (RED BLIPS)
       enemies.forEach((enemy) => {
-        if (!enemy?.position || enemy.health <= 0) return;
+        if (enemy.health <= 0) return;
         const ex = toCanvasX(enemy.position.x);
         const ey = toCanvasY(enemy.position.z);
 
@@ -150,7 +129,7 @@ export const TopoMapModal: React.FC<TopoMapModalProps> = ({
 
       // Draw Friendly AI Operators (BLUE BLIPS)
       friendlies.forEach((friendly) => {
-        if (!friendly?.position || friendly.status === 'KIA') return;
+        if (friendly.status === 'KIA') return;
         const fx = toCanvasX(friendly.position.x);
         const fy = toCanvasY(friendly.position.z);
 

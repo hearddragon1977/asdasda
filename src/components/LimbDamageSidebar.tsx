@@ -25,7 +25,7 @@ export const LimbDamageSidebar: React.FC<LimbDamageSidebarProps> = ({
 }) => {
   // Compute approximate limb HP based on active ballistic wounds
   const getLimbHealth = (zoneSubstring: string) => {
-    const limbWounds = (wounds ?? []).filter((w) => w?.zone?.includes(zoneSubstring));
+    const limbWounds = wounds.filter((w) => w.zone.includes(zoneSubstring));
     if (limbWounds.length === 0) return 100;
     // Each unhalted wound reduces limb integrity
     let health = 100;

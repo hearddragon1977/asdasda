@@ -87,41 +87,29 @@ export function subscribeToUserOperators(
           const d = docSnap.data();
           return {
             id: docSnap.id,
-            name: asString(d.name, 'Unknown Operator'),
-            callsign: asString(d.callsign, 'Unknown'),
-            rank: asString(d.rank, 'Operator'),
-            unit: asString(d.unit, 'Unassigned'),
-            bloodType: (asString(d.bloodType, 'O+') as OperatorRecord['bloodType']),
-            status: (asString(d.status, 'active') as OperatorRecord['status']),
-            deployments: asNumber(d.deployments),
-            hostilesEliminated: asNumber(d.hostilesEliminated),
-            injuriesSustained: Array.isArray(d.injuriesSustained) ? d.injuriesSustained.filter((item) => typeof item === 'string') : [],
-            dischargeReason: asString(d.dischargeReason),
+            name: d.name,
+            callsign: d.callsign,
+            rank: d.rank,
+            unit: d.unit,
+            bloodType: d.bloodType,
+            status: d.status,
+            deployments: d.deployments,
+            hostilesEliminated: d.hostilesEliminated,
+            injuriesSustained: d.injuriesSustained || [],
+            dischargeReason: d.dischargeReason,
             purpleHeartAwarded: Boolean(d.purpleHeartAwarded),
-            timestamp: asString(d.createdAt),
+            timestamp: d.createdAt,
           };
         });
         onUpdate(ops);
       },
       (error) => {
-        try {
-          handleFirestoreError(error, OperationType.GET, path);
-        } catch {
-          // Snapshot listeners must not surface a second exception.
-        }
+        handleFirestoreError(error, OperationType.GET, path);
       }
     );
   } catch (err) {
     handleFirestoreError(err, OperationType.GET, path);
   }
-}
-
-function asString(value: unknown, fallback = ''): string {
-  return typeof value === 'string' ? value : fallback;
-}
-
-function asNumber(value: unknown, fallback = 0): number {
-  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
 }
 
 export async function saveCasualtyReportToFirestore(
@@ -133,14 +121,14 @@ export async function saveCasualtyReportToFirestore(
     const docRef = doc(db, 'casualty_reports', report.id);
     await setDoc(docRef, {
       userId,
-      operatorName: asString(report?.operatorName).slice(0, 100),
-      callsign: asString(report?.callsign).slice(0, 60),
-      outcome: report?.outcome ?? 'dia',
-      finalBloodVolume: Math.max(0, Math.min(5000, Math.round(asNumber(report?.finalBloodVolume)))),
-      woundsCount: Math.max(0, asNumber(report?.woundsCount)),
-      woundsSummary: (report?.woundsSummary || []).filter((item) => typeof item === 'string').slice(0, 20),
-      boardFindings: asString(report?.boardFindings).slice(0, 1000),
-      createdAt: asString(report?.createdAt, new Date().toISOString()),
+      operatorName: report.operatorName.slice(0, 100),
+      callsign: report.callsign.slice(0, 60),
+      outcome: report.outcome,
+      finalBloodVolume: Math.max(0, Math.min(5000, Math.round(report.finalBloodVolume))),
+      woundsCount: Math.max(0, report.woundsCount),
+      woundsSummary: (report.woundsSummary || []).slice(0, 20),
+      boardFindings: report.boardFindings.slice(0, 1000),
+      createdAt: report.createdAt || new Date().toISOString(),
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
@@ -161,25 +149,21 @@ export function subscribeToCasualtyReports(
           const d = docSnap.data();
           return {
             id: docSnap.id,
-            userId: asString(d.userId),
-            operatorName: asString(d.operatorName, 'Unknown Operator'),
-            callsign: asString(d.callsign, 'Unknown'),
-            outcome: (asString(d.outcome, 'dia') as CasualtyReportRecord['outcome']),
-            finalBloodVolume: asNumber(d.finalBloodVolume),
-            woundsCount: asNumber(d.woundsCount),
-            woundsSummary: Array.isArray(d.woundsSummary) ? d.woundsSummary.filter((item) => typeof item === 'string') : [],
-            boardFindings: asString(d.boardFindings),
-            createdAt: asString(d.createdAt),
+            userId: d.userId,
+            operatorName: d.operatorName,
+            callsign: d.callsign,
+            outcome: d.outcome,
+            finalBloodVolume: d.finalBloodVolume,
+            woundsCount: d.woundsCount,
+            woundsSummary: d.woundsSummary || [],
+            boardFindings: d.boardFindings,
+            createdAt: d.createdAt,
           };
         });
         onUpdate(reports);
       },
       (error) => {
-        try {
-          handleFirestoreError(error, OperationType.GET, path);
-        } catch {
-          // Snapshot listeners must not surface a second exception.
-        }
+        handleFirestoreError(error, OperationType.GET, path);
       }
     );
   } catch (err) {

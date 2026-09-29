@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { AnatomicalWound, MedicalKit, PlayerVitals } from '../types/game';
 import { anatomySim } from '../game/anatomySimulation';
 
@@ -24,29 +24,16 @@ export const FieldMedicineModal: React.FC<FieldMedicineModalProps> = ({
   const [selectedWoundId, setSelectedWoundId] = useState<string | null>(null);
   const [actionProgress, setActionProgress] = useState<number>(0);
   const [activeActionLabel, setActiveActionLabel] = useState<string | null>(null);
-  const actionTimerRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (!isOpen && actionTimerRef.current) {
-      window.clearInterval(actionTimerRef.current);
-      actionTimerRef.current = null;
-    }
-    return () => {
-      if (actionTimerRef.current) window.clearInterval(actionTimerRef.current);
-    };
-  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const safeWounds = wounds ?? [];
-  const selectedWound = safeWounds.find((w) => w.id === selectedWoundId) || (safeWounds.length > 0 ? safeWounds[0] : null);
+  const selectedWound = wounds.find((w) => w.id === selectedWoundId) || (wounds.length > 0 ? wounds[0] : null);
 
   const performHoldAction = (label: string, durationMs: number, onComplete: () => void) => {
     setActiveActionLabel(label);
     setActionProgress(10);
 
     const startTime = Date.now();
-    if (actionTimerRef.current) window.clearInterval(actionTimerRef.current);
     const interval = window.setInterval(() => {
       const elapsed = Date.now() - startTime;
       const pct = Math.min(100, Math.round((elapsed / durationMs) * 100));
@@ -54,14 +41,12 @@ export const FieldMedicineModal: React.FC<FieldMedicineModalProps> = ({
 
       if (pct >= 100) {
         clearInterval(interval);
-        actionTimerRef.current = null;
         setActiveActionLabel(null);
         setActionProgress(0);
         onComplete();
         onRefreshVitals();
       }
     }, 50);
-    actionTimerRef.current = interval;
   };
 
   const handleApplyTourniquet = (wound: AnatomicalWound) => {
@@ -160,16 +145,16 @@ export const FieldMedicineModal: React.FC<FieldMedicineModalProps> = ({
           {/* Active Wounds List */}
           <div className="md:col-span-5 flex flex-col gap-2">
             <span className="text-xs uppercase text-stone-400 font-bold border-b border-stone-800 pb-1">
-              Recorded Ballistic Wounds ({safeWounds.length})
+              Recorded Ballistic Wounds ({wounds.length})
             </span>
 
-            {safeWounds.length === 0 ? (
+            {wounds.length === 0 ? (
               <div className="p-4 bg-stone-950/60 border border-stone-800/80 text-stone-400 text-xs text-center">
                 No active ballistic trauma detected. Operator armor intact.
               </div>
             ) : (
               <div className="flex flex-col gap-2 max-h-72 overflow-y-auto pr-1">
-                {safeWounds.map((w, index) => {
+                {wounds.map((w, index) => {
                   const isSelected = selectedWound?.id === w.id;
                   const isControlled = w.bleedingRate === 0;
 

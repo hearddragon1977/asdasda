@@ -16,19 +16,15 @@ import {
   InventoryState,
   CasevacState,
   OperatorRecord,
-  UnitLoadoutState,
 } from './types/game';
 
 import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
-=======
 import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, switchWeaponSlot, syncWeaponIntoInventory } from './data/inventory.js';
 import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
-
 import { equipmentManager, playerEquipment } from './systems/equipment.js';
-
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
   CasualtyReportRecord,
@@ -37,14 +33,6 @@ import {
   subscribeToCasualtyReports,
   subscribeToUserOperators,
 } from './firebase/firestoreService';
-import { getWeaponById } from './data/weapons.js';
-import {
-  createDefaultInventory,
-  getActiveWeaponState,
-  replenishInventoryAmmo,
-  switchWeaponSlot,
-  syncWeaponIntoInventory,
-} from './data/inventory.js';
 
 function TacticalAppContent() {
   const { user, signInWithGoogle } = useAuth();
@@ -88,10 +76,6 @@ function TacticalAppContent() {
   weaponLive.current = weapon;
   inventoryLive.current = inventory;
 
-  const [playerLoadout, setPlayerLoadout] = useState<UnitLoadoutState>(() =>
-    playerEquipment.snapshot()
-  );
-
   // CASEVAC 9-Line State
   const [casevac, setCasevac] = useState<CasevacState>({
     status: 'idle',
@@ -110,14 +94,6 @@ function TacticalAppContent() {
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
   const [isPauseMenuOpen, setIsPauseMenuOpen] = useState(false);
-  const casevacTimers = useRef<number[]>([]);
-
-  useEffect(() => {
-    return () => {
-      casevacTimers.current.forEach((timerId) => window.clearTimeout(timerId));
-      casevacTimers.current = [];
-    };
-  }, []);
 
   // Toggle God Mode
   const handleToggleGodMode = useCallback(() => {
@@ -143,9 +119,6 @@ function TacticalAppContent() {
   // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'Escape' for Pause
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement | null)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-
       if (e.key === 'g' || e.key === 'G') {
         handleToggleGodMode();
       }
@@ -159,27 +132,9 @@ function TacticalAppContent() {
         });
       }
       if (e.key === 'm' || e.key === 'M') {
-        if (!isInventoryOpen) setIsMapOpen((prev) => !prev);
-      }
-      if (e.key === 'i' || e.key === 'I') {
-        e.preventDefault();
-        if (isInventoryOpen) {
-          closeInventory();
-        } else {
-          openInventory();
-        }
-      }
-      if (e.key === '1' && !isInventoryOpen && !isPauseMenuOpen) {
-        handleSwitchWeaponSlot('primary');
-      }
-      if (e.key === '2' && !isInventoryOpen && !isPauseMenuOpen) {
-        handleSwitchWeaponSlot('sidearm');
+        setIsMapOpen((prev) => !prev);
       }
       if (e.key === 'Escape') {
-        if (isInventoryOpen) {
-          closeInventory();
-          return;
-        }
         setIsPauseMenuOpen((prev) => {
           const next = !prev;
           setIsPaused(next);
@@ -277,7 +232,6 @@ function TacticalAppContent() {
     const enemyName = enemy ? `${enemy.callsign}` : 'hostile';
 
     if (shooterId === 'player') {
-      const gun = getWeaponById(weaponRef.current.weaponId);
       setPlayerKills((prev) => prev + 1);
       setKillFeed((prev) => [
         ...prev,
@@ -315,8 +269,6 @@ function TacticalAppContent() {
 
   const handleResetTrauma = () => {
     anatomySim.reset();
-    suppressionSystem.reset();
-    tacticalAudio.setSuppressionMuffle(0);
     setCasevac({
       status: 'idle',
       smokeDeployed: false,
@@ -338,12 +290,6 @@ function TacticalAppContent() {
     if (casevac.status !== 'idle') return;
     tacticalAudio.init();
     tacticalAudio.playRadioSquelchChirp();
-    casevacTimers.current.forEach((timerId) => window.clearTimeout(timerId));
-    casevacTimers.current = [];
-    const queueCasevac = (delay: number, run: () => void) => {
-      const timerId = window.setTimeout(run, delay);
-      casevacTimers.current.push(timerId);
-    };
 
     setCasevac({
       status: 'calling',
@@ -353,7 +299,7 @@ function TacticalAppContent() {
       squadMembers: [],
     });
 
-    queueCasevac(2800, () => {
+    setTimeout(() => {
       tacticalAudio.playRadioSquelchChirp();
       setCasevac((prev) => ({
         ...prev,
@@ -362,9 +308,9 @@ function TacticalAppContent() {
         progress: 40,
         message: 'Dustoff-4 inbound. Marked LZ with green smoke flare! Keep perimeter clear.',
       }));
-    });
+    }, 2800);
 
-    queueCasevac(6000, () => {
+    setTimeout(() => {
       tacticalAudio.playRadioSquelchChirp();
       setCasevac((prev) => ({
         ...prev,
@@ -372,9 +318,9 @@ function TacticalAppContent() {
         progress: 70,
         message: 'Dustoff-4 boots on ground! Security team laying down suppressive fire. Medic moving to casualty!',
       }));
-    });
+    }, 6000);
 
-    queueCasevac(9500, () => {
+    setTimeout(() => {
       tacticalAudio.playRadioSquelchChirp();
       const outcome = rosterManager.processCasualtyOutcome(
         anatomySim.vitals,
@@ -484,7 +430,7 @@ function TacticalAppContent() {
           user.uid
         ).catch(() => {});
       }
-    });
+    }, 9500);
   };
 
   const handleConfirmCasualtyOutcome = () => {
@@ -566,13 +512,6 @@ function TacticalAppContent() {
           )}
 
           <button
-            onClick={openInventory}
-            className="px-2.5 py-1 text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
-          >
-            GEAR [I]
-          </button>
-
-          <button
             onClick={() => setIsMapOpen(true)}
             className="px-2.5 py-1 text-xs font-mono bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded cursor-pointer"
           >
@@ -602,18 +541,13 @@ function TacticalAppContent() {
       <main className="relative flex-1 w-full h-full overflow-hidden">
         <TacticalViewport
           weapon={weapon}
-          activeWeaponSlot={inventory.activeWeaponSlot}
-          hasPrimary={!!inventory.primary}
-          hasSidearm={!!inventory.sidearm}
           godMode={godMode}
           isPaused={isPaused}
           onToggleGodMode={handleToggleGodMode}
           onUpdateWeapon={setWeapon}
-          onSwitchWeaponSlot={handleSwitchWeaponSlot}
           onToggleMap={() => setIsMapOpen((prev) => !prev)}
           onCallCasevac={handleCallCasevac}
           onOpenRoster={() => setIsRosterOpen(true)}
-          onOpenInventory={openInventory}
           onOpenScoreboard={() => setIsScoreboardOpen(true)}
           onOpenPauseMenu={() => {
             setIsPauseMenuOpen(true);
@@ -649,7 +583,6 @@ function TacticalAppContent() {
           enemies={enemies}
           currentWave={currentWave}
           killFeed={killFeed}
-          equippedWeaponName={getWeaponById(weapon.weaponId)?.shortName ?? 'Unarmed'}
         />
 
         {/* Real Live Topographic Sector Map Modal */}
@@ -671,10 +604,6 @@ function TacticalAppContent() {
           onOpenScoreboard={() => setIsScoreboardOpen(true)}
           onOpenMap={() => setIsMapOpen(true)}
           onOpenRoster={() => setIsRosterOpen(true)}
-          onOpenInventory={() => {
-            setIsPauseMenuOpen(false);
-            openInventory();
-          }}
           onCallCasevac={handleCallCasevac}
           onRestartMission={() => {
             setIsPauseMenuOpen(false);
@@ -696,15 +625,6 @@ function TacticalAppContent() {
         <InventoryModal
           isOpen={isInventoryOpen}
           onClose={() => setIsInventoryOpen(false)}
-          inventory={inventory}
-          weapon={weapon}
-          onChangeLoadout={applyLoadout}
-        />
-
-        {/* Equippable loadout: primary / sidearm / helmet / vest / backpack */}
-        <InventoryModal
-          isOpen={isInventoryOpen}
-          onClose={closeInventory}
           inventory={inventory}
           weapon={weapon}
           onChangeLoadout={applyLoadout}

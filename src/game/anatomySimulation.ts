@@ -145,15 +145,6 @@ export class AnatomySimulation {
         description = 'Catastrophic high-pressure femoral bleed. Severe limp, sprint disabled.';
         this.vitals.limping = true;
         break;
-
-      default: {
-        const unknown = String(zone ?? 'unmapped');
-        name = `Unrecognized trauma (${unknown})`;
-        type = 'venous';
-        bleedRate = 0;
-        description = 'Hit registered without a mapped anatomical node.';
-        break;
-      }
     }
 
     woundGlobalCounter++;
@@ -285,7 +276,7 @@ export class AnatomySimulation {
    * dt: delta time in seconds
    */
   public update(dt: number): void {
-    if (!this.vitals || !Number.isFinite(dt) || dt <= 0 || this.vitals.shockStage === 'cardiac_arrest') return;
+    if (this.vitals.shockStage === 'cardiac_arrest') return;
 
     // Calculate total bleed rate
     let totalBleedRate = 0;
@@ -293,9 +284,8 @@ export class AnatomySimulation {
     let openTensionPneumo = false;
 
     for (const w of this.wounds) {
-      if (!w) continue;
       w.timeSinceHit += dt;
-      totalBleedRate += Number.isFinite(w.bleedingRate) ? w.bleedingRate : 0;
+      totalBleedRate += w.bleedingRate;
 
       if (w.zone === 'torso_lungs') {
         hasOpenLungWound = true;
