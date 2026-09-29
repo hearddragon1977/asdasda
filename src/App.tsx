@@ -116,7 +116,7 @@ function TacticalAppContent() {
     setIsInventoryOpen(true);
   }, []);
 
-  // Global key bindings: 'G' for God mode, 'Tab' for Scoreboard, 'M' for Map, 'Escape' for Pause
+  // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'Escape' for Pause
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
       if (e.key === 'g' || e.key === 'G') {
@@ -124,7 +124,12 @@ function TacticalAppContent() {
       }
       if (e.key === 'Tab') {
         e.preventDefault();
-        setIsScoreboardOpen((prev) => !prev);
+        if (document.pointerLockElement) document.exitPointerLock();
+        setIsPauseMenuOpen((prev) => {
+          const next = !prev;
+          setIsPaused(next);
+          return next;
+        });
       }
       if (e.key === 'm' || e.key === 'M') {
         setIsMapOpen((prev) => !prev);
@@ -470,7 +475,7 @@ function TacticalAppContent() {
             onClick={() => setIsScoreboardOpen(true)}
             className="hover:text-amber-400 transition-colors cursor-pointer"
           >
-            Scoreboard [TAB]
+            Scoreboard
           </button>
           <span>·</span>
           <button
@@ -487,7 +492,7 @@ function TacticalAppContent() {
             }}
             className="hover:text-amber-400 transition-colors cursor-pointer text-sky-400 font-bold"
           >
-            Menu [ESC]
+            Menu [TAB]
           </button>
         </nav>
 

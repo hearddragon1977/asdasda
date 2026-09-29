@@ -44,7 +44,7 @@ export const PauseMenuModal: React.FC<PauseMenuModalProps> = ({
             onClick={onResume}
             className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-slate-950 font-bold text-xs uppercase tracking-wider rounded transition-colors cursor-pointer"
           >
-            Resume Engagement [ESC]
+            Resume Engagement [TAB]
           </button>
 
           <button
@@ -55,7 +55,6 @@ export const PauseMenuModal: React.FC<PauseMenuModalProps> = ({
             className="w-full py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold rounded transition-colors cursor-pointer flex items-center justify-between px-4"
           >
             <span>Team Scoreboard & Kills</span>
-            <span className="text-[10px] text-slate-400">[TAB]</span>
           </button>
 
           <button

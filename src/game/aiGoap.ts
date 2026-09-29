@@ -47,6 +47,8 @@ export class GuerrillaAiDirector {
 
   public enemies: EnemyCombatant[] = [];
   public friendlies: FriendlyCombatant[] = [];
+  /** Street points measured from the loaded city. Later waves reuse these. */
+  private cityEnemySpawns: { x: number; y: number; z: number }[] = [];
 
   // Wave Respawn System
   public currentWave: number = 1;
@@ -184,26 +186,33 @@ export class GuerrillaAiDirector {
     const nw = spawnZonePos('enemy_nw_warehouse');
     const ne = spawnZonePos('enemy_ne_warehouse');
 
-    // All OPFOR start on marked enemy pads — never inside the BLUEFOR staging courtyard.
-    let sgtPos = { ...north };
-    let rpkPos = { x: nw.x + 3, y: 0, z: nw.z + 2 };
-    let svdPos = { x: ne.x - 3, y: 0, z: ne.z + 2 };
-    let flankWPos = { x: west.x + 2, y: 0, z: west.z - 4 };
-    let flankEPos = { x: east.x - 2, y: 0, z: east.z - 4 };
+    const streetSpot = (index: number, fallback: { x: number; y: number; z: number }) => {
+      const spot = this.cityEnemySpawns[index];
+      if (!spot) return { ...fallback };
+      return { x: spot.x, y: spot.y, z: spot.z };
+    };
 
-    if (approach === 'east_flank') {
+    // On the city, every hostile stands on a measured street point.
+    // The old pad offsets pushed them past the road into empty space.
+    let sgtPos = streetSpot(0, north);
+    let rpkPos = streetSpot(1, nw);
+    let svdPos = streetSpot(2, ne);
+    let flankWPos = streetSpot(3, west);
+    let flankEPos = streetSpot(4, east);
+
+    if (this.cityEnemySpawns.length === 0 && approach === 'east_flank') {
       sgtPos = { ...east };
       rpkPos = { x: east.x - 1, y: 0, z: east.z + 5 };
       svdPos = { ...ne };
       flankWPos = { x: east.x - 2, y: 0, z: east.z - 5 };
       flankEPos = { x: ne.x - 2, y: 0, z: ne.z + 3 };
-    } else if (approach === 'west_breach') {
+    } else if (this.cityEnemySpawns.length === 0 && approach === 'west_breach') {
       sgtPos = { ...west };
       rpkPos = { x: west.x + 1, y: 0, z: west.z + 5 };
       svdPos = { ...nw };
       flankWPos = { x: nw.x + 2, y: 0, z: nw.z + 3 };
       flankEPos = { x: west.x + 2, y: 0, z: west.z - 5 };
-    } else if (approach === 'pincer_ambush') {
+    } else if (this.cityEnemySpawns.length === 0 && approach === 'pincer_ambush') {
       sgtPos = { ...north };
       rpkPos = { ...west };
       svdPos = { ...east };
@@ -320,15 +329,18 @@ export class GuerrillaAiDirector {
     ];
 
     if (waveNum > 1) {
-      const randomPerimeterX = (Math.random() - 0.5) * 60;
-      const randomPerimeterZ = (Math.random() - 0.5) * 60;
+      const extra = streetSpot(5, {
+        x: (north.x + east.x) / 2,
+        y: 0,
+        z: (north.z + east.z) / 2,
+      });
       waveRoster.push({
         id: `wave${waveNum}_enforcer`,
         name: 'Jamil (Reinforcement)',
         callsign: 'Viper-Point',
         role: 'Breacher (AKM Heavy Burst)',
         isCommander: false,
-        position: { x: randomPerimeterX, y: 0, z: randomPerimeterZ },
+        position: extra,
         rotationY: Math.PI,
         health: 100,
         kills: 0,
@@ -373,6 +385,8 @@ export class GuerrillaAiDirector {
       staging.position.x = layout.player.x;
       staging.position.z = layout.player.z;
     }
+
+    this.cityEnemySpawns = layout.enemies.map((spot) => ({ x: spot.x, y: spot.y, z: spot.z }));
 
     const enemyZones = TACTICAL_SPAWN_ZONES.filter((zone) => zone.faction === 'enemy');
     layout.enemies.forEach((spot, index) => {
