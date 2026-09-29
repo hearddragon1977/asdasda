@@ -1,12 +1,14 @@
 /**
  * Decentralized enemy AI.
- * Each combatant elects suppress / flank / advance roles from local peer cues —
- * no global commander node issues orders.
+ * The cell hunts as a pack: one gunner walks fire forward, everyone else
+ * hooks a flank and rushes. Wounded friendlies are finished. Nobody falls back.
  */
 
-const ENGAGE_RANGE = 42;
-const PREFERRED_RANGE = { close: 10, mid: 16, far: 28 };
-const MOVE = { flank: 5.4, advance: 3.9, retreat: 3.6 };
+import { clampToMap } from '../game/mapBounds';
+
+const ENGAGE_RANGE = 52;
+const HOLD = { rush: 5.2, gunner: 11, marksman: 16 };
+const MOVE = { flank: 8.1, advance: 7.2, rush: 8.8, creep: 4.6, strafe: 2.8 };
 
 /**
  * @typedef {{ x: number, y: number, z: number }} Vec3
@@ -21,12 +23,21 @@ const MOVE = { flank: 5.4, advance: 3.9, retreat: 3.6 };
  *   shootCooldown?: number,
  *   burstRemaining?: number,
  *   isCommander?: boolean,
+ *   seekingAngle?: boolean,
+ *   strafePhase?: number,
  * }} Enemy
+ * @typedef {{ pos: Vec3, bonus: number, dist?: number, score?: number }} Prey
  */
 
 /**
- * Soft peer coordination: who currently owns suppress / flank slots.
- * Claimed locally by the best-fit living combatant each tick.
+ * @param {Vec3} a
+ * @param {Vec3} b
+ */
+function dist2(a, b) {
+  return Math.hypot(a.x - b.x, a.z - b.z);
+}
+
+/**
  * @param {Enemy[]} alive
  * @param {Vec3} focus
  */
@@ -37,19 +48,17 @@ function electPeerRoles(alive, focus) {
   let bestFlank = -Infinity;
 
   for (const e of alive) {
-    const dist = Math.hypot(e.position.x - focus.x, e.position.z - focus.z);
+    const dist = dist2(e.position, focus);
     const isGunner = e.role.includes('RPK') || e.role.includes('Support');
     const isFlanker = e.role.includes('Flanker') || e.role.includes('Raider') || e.role.includes('Breacher');
     const isMarksman = e.role.includes('SVD') || e.role.includes('Marksman');
 
-    // Prefer heavy weapons and mid-range for suppression
-    let suppressScore = (isGunner ? 40 : isMarksman ? 10 : 15) + (28 - Math.abs(dist - 18));
-    if (e.state === 'suppress' || e.state === 'overwatch') suppressScore += 8;
+    let suppressScore = (isGunner ? 50 : isMarksman ? 4 : 8) - Math.abs(dist - 14);
+    if (e.state === 'suppress') suppressScore += 6;
 
-    // Prefer flankers and lateral offset for flanking
     const lateral = Math.abs(e.position.x - focus.x);
-    let flankScore = (isFlanker ? 45 : 12) + lateral * 0.8 - dist * 0.15;
-    if (e.state === 'flank_left' || e.state === 'flank_right') flankScore += 10;
+    let flankScore = (isFlanker ? 40 : 14) + lateral * 0.6 - dist * 0.05;
+    if (e.state === 'flank_left' || e.state === 'flank_right') flankScore += 8;
 
     if (suppressScore > bestSuppress) {
       bestSuppress = suppressScore;
@@ -61,7 +70,6 @@ function electPeerRoles(alive, focus) {
     }
   }
 
-  // Avoid double-booking the same unit when multiple peers exist
   if (suppressor && flanker && suppressor.id === flanker.id && alive.length > 1) {
     const alt = alive.find((e) => e.id !== suppressor.id);
     if (alt) flanker = alt;
@@ -74,190 +82,269 @@ function electPeerRoles(alive, focus) {
 }
 
 /**
- * Pick engagement focus: player, or a nearby friendly if player is far.
- * @param {Enemy} enemy
+ * Player plus every living friendly. Wounded operators are worth more than a healthy one.
  * @param {Vec3} playerPos
- * @param {{ position: Vec3 }[]} aliveFriendlies
+ * @param {{ position: Vec3, status?: string, health?: number, id?: string }[]} aliveFriendlies
+ * @returns {Prey[]}
  */
-function pickFocus(enemy, playerPos, aliveFriendlies) {
-  const distPlayer = Math.hypot(playerPos.x - enemy.position.x, playerPos.z - enemy.position.z);
-  if (distPlayer <= 18) return { pos: playerPos, dist: distPlayer };
-
-  let best = { pos: playerPos, dist: distPlayer };
+function buildPrey(playerPos, aliveFriendlies) {
+  /** @type {Prey[]} */
+  const prey = [{ pos: playerPos, bonus: 24 }];
   for (const f of aliveFriendlies) {
-    const d = Math.hypot(f.position.x - enemy.position.x, f.position.z - enemy.position.z);
-    if (d < 10 && d < best.dist) best = { pos: f.position, dist: d };
+    const health = f.health ?? 100;
+    const wounded = f.status === 'WIA' || health <= 40;
+    prey.push({
+      pos: f.position,
+      bonus: (wounded ? 72 : 8) + Math.max(0, 100 - health) * 0.3,
+    });
+  }
+  return prey;
+}
+
+/**
+ * @param {Vec3} origin
+ * @param {Prey} candidate
+ * @returns {Prey}
+ */
+function scorePrey(origin, candidate) {
+  const dist = dist2(origin, candidate.pos);
+  return { ...candidate, dist, score: candidate.bonus + 110 - dist };
+}
+
+/**
+ * Pack picks one victim from the squad center, then each fighter peels
+ * if someone is already in their face.
+ * @param {Enemy} enemy
+ * @param {Prey|null} squadPrey
+ * @param {Prey[]} candidates
+ */
+function pickFocus(enemy, squadPrey, candidates) {
+  let local = null;
+  for (const c of candidates) {
+    const scored = scorePrey(enemy.position, c);
+    if (scored.dist <= 8 && (!local || scored.score > local.score)) local = scored;
+  }
+  if (local) return local;
+  if (squadPrey) return scorePrey(enemy.position, squadPrey);
+
+  let best = scorePrey(enemy.position, candidates[0]);
+  for (let i = 1; i < candidates.length; i++) {
+    const scored = scorePrey(enemy.position, candidates[i]);
+    if (scored.score > best.score) best = scored;
   }
   return best;
 }
 
 /**
- * Decide autonomous state from peer elections + own role/geometry.
  * @param {Enemy} enemy
- * @param {{ suppressorId: string|null, flankerId: string|null }} peers
+ * @param {{ suppressorId: string|null }} peers
  * @param {Vec3} focus
  * @param {number} dist
+ * @param {number} index
+ * @param {number} aliveCount
  */
-function decideState(enemy, peers, focus, dist) {
+function decideState(enemy, peers, focus, dist, index, aliveCount) {
   const isMarksman = enemy.role.includes('SVD') || enemy.role.includes('Marksman');
+  const isGunner = eRoleGunner(enemy);
+  const wounded = enemy.health > 0 && enemy.health <= 45;
 
-  if (enemy.id === peers.suppressorId) {
-    return isMarksman ? 'overwatch' : 'suppress';
+  // A hurt fighter closes instead of running. Remnants don't set up a defense.
+  if (wounded || aliveCount <= 2) return 'advance';
+
+  if (enemy.seekingAngle) {
+    return index % 2 === 0 ? 'flank_left' : 'flank_right';
   }
 
-  if (enemy.id === peers.flankerId) {
-    return focus.x >= enemy.position.x ? 'flank_right' : 'flank_left';
-  }
+  if (enemy.id === peers.suppressorId && isGunner && dist < 34) return 'suppress';
+  if (isMarksman && dist < 30 && dist > 8) return 'overwatch';
 
-  if (isMarksman) return 'overwatch';
-  if (dist > PREFERRED_RANGE.mid) return 'advance';
-  if (dist < PREFERRED_RANGE.close) return 'take_cover';
-  return 'suppress';
+  // Pincer: even indexes wrap the side they already own, odd indexes cross.
+  const onLeft = enemy.position.x <= focus.x;
+  const cross = index % 2 === 1;
+  const goLeft = cross ? !onLeft : onLeft;
+  if (dist > HOLD.rush + 4) return goLeft ? 'flank_left' : 'flank_right';
+  return 'advance';
 }
 
 /**
- * Lateral flank anchor opposite the peer suppressor when possible.
  * @param {Enemy} enemy
- * @param {Vec3} focus
- * @param {'flank_left'|'flank_right'} side
- * @param {Enemy[]} alive
  */
-function flankAnchor(enemy, focus, side, alive) {
-  const sign = side === 'flank_left' ? -1 : 1;
-  const baseX = focus.x + sign * (18 + Math.random() * 6);
-  const baseZ = focus.z + (Math.random() - 0.5) * 8 - 2;
-
-  // Soft deconflict: nudge away from other living peers
-  let x = baseX;
-  let z = baseZ;
-  for (const peer of alive) {
-    if (peer.id === enemy.id) continue;
-    const dx = x - peer.position.x;
-    const dz = z - peer.position.z;
-    const d = Math.hypot(dx, dz);
-    if (d < 4 && d > 0.01) {
-      x += (dx / d) * 2.5;
-      z += (dz / d) * 2.5;
-    }
-  }
-
-  return { x, y: 0, z: baseZ };
+function eRoleGunner(enemy) {
+  return enemy.role.includes('RPK') || enemy.role.includes('Support');
 }
 
 /**
- * Move according to autonomous state.
+ * Point on a ring around the prey, shoved sideways so the pack doesn't stack.
+ * @param {Vec3} from
+ * @param {Vec3} focus
+ * @param {number} standoff
+ * @param {number} lateral
+ */
+function ringPoint(from, focus, standoff, lateral) {
+  const dx = focus.x - from.x;
+  const dz = focus.z - from.z;
+  const dist = Math.hypot(dx, dz) || 1;
+  const px = -dz / dist;
+  const pz = dx / dist;
+  return {
+    x: focus.x - (dx / dist) * standoff + px * lateral,
+    z: focus.z - (dz / dist) * standoff + pz * lateral,
+  };
+}
+
+/**
+ * @param {Enemy} enemy
+ * @param {{ x: number, z: number }} goal
+ * @param {number} speed
+ * @param {number} dt
+ */
+function steer(enemy, goal, speed, dt) {
+  const fdx = goal.x - enemy.position.x;
+  const fdz = goal.z - enemy.position.z;
+  const fDist = Math.hypot(fdx, fdz);
+  enemy.targetPosition = { x: goal.x, y: 0, z: goal.z };
+  if (fDist <= 0.4) return;
+  enemy.position.x += (fdx / fDist) * speed * dt;
+  enemy.position.z += (fdz / fDist) * speed * dt;
+}
+
+/**
  * @param {Enemy} enemy
  * @param {Vec3} focus
  * @param {number} dist
  * @param {number} dt
- * @param {Enemy[]} alive
  */
-function applyMovement(enemy, focus, dist, dt, alive) {
-  const dx = focus.x - enemy.position.x;
-  const dz = focus.z - enemy.position.z;
+function applyMovement(enemy, focus, dist, dt) {
+  const rush = enemy.health <= 45 ? MOVE.rush : MOVE.advance;
+  enemy.strafePhase = (enemy.strafePhase ?? enemy.position.x * 0.1) + dt * 1.3;
+  const weave = Math.sin(enemy.strafePhase) * 3.5;
 
   switch (enemy.state) {
     case 'flank_left':
     case 'flank_right': {
-      if (!enemy.targetPosition || Math.hypot(
-        enemy.targetPosition.x - enemy.position.x,
-        enemy.targetPosition.z - enemy.position.z
-      ) < 1.2) {
-        enemy.targetPosition = flankAnchor(enemy, focus, enemy.state, alive);
-      }
-      const fdx = enemy.targetPosition.x - enemy.position.x;
-      const fdz = enemy.targetPosition.z - enemy.position.z;
-      const fDist = Math.hypot(fdx, fdz);
-      if (fDist > 1.2) {
-        enemy.position.x += (fdx / fDist) * MOVE.flank * dt;
-        enemy.position.z += (fdz / fDist) * MOVE.flank * dt;
+      const sign = enemy.state === 'flank_left' ? -1 : 1;
+      if (dist > 12) {
+        steer(enemy, ringPoint(enemy.position, focus, 7, sign * 12), MOVE.flank, dt);
       } else {
-        enemy.state = 'advance';
+        steer(enemy, ringPoint(enemy.position, focus, HOLD.rush, sign * 4 + weave), rush, dt);
       }
       break;
     }
-    case 'overwatch':
-    case 'take_cover': {
-      if (dist < PREFERRED_RANGE.close && dist > 0.01) {
-        enemy.position.x -= (dx / dist) * MOVE.retreat * dt;
-        enemy.position.z -= (dz / dist) * MOVE.retreat * dt;
-      }
+    case 'overwatch': {
+      const lateral = (enemy.seekingAngle ? 11 : 5) * (enemy.position.x <= focus.x ? -1 : 1);
+      const standoff = dist < 5 ? 7 : HOLD.marksman;
+      const speed = dist > HOLD.marksman ? MOVE.creep * 1.35 : MOVE.strafe;
+      steer(enemy, ringPoint(enemy.position, focus, standoff, lateral + weave), speed, dt);
       break;
     }
     case 'suppress': {
-      // Hold mid-range firing lane
-      if (dist > PREFERRED_RANGE.far && dist > 0.01) {
-        enemy.position.x += (dx / dist) * MOVE.advance * 0.7 * dt;
-        enemy.position.z += (dz / dist) * MOVE.advance * 0.7 * dt;
-      } else if (dist < PREFERRED_RANGE.mid && dist > 0.01) {
-        enemy.position.x -= (dx / dist) * MOVE.retreat * 0.5 * dt;
-        enemy.position.z -= (dz / dist) * MOVE.retreat * 0.5 * dt;
+      const lateral = (enemy.seekingAngle ? 8 : 2.5) + weave;
+      if (dist > HOLD.gunner) {
+        steer(enemy, ringPoint(enemy.position, focus, HOLD.gunner, lateral), MOVE.creep, dt);
+      } else {
+        steer(enemy, ringPoint(enemy.position, focus, HOLD.gunner, lateral), MOVE.strafe, dt);
       }
       break;
     }
     default: {
-      if (dist > PREFERRED_RANGE.mid && dist > 0.01) {
-        enemy.position.x += (dx / dist) * MOVE.advance * dt;
-        enemy.position.z += (dz / dist) * MOVE.advance * dt;
-      }
+      const lateral = (enemy.seekingAngle ? 9 : weave);
+      steer(enemy, ringPoint(enemy.position, focus, HOLD.rush, lateral), rush, dt);
       break;
+    }
+  }
+
+  clampToMap(enemy.position);
+}
+
+/**
+ * @param {Enemy[]} alive
+ */
+function separatePack(alive) {
+  const minDist = 2.7;
+  for (let i = 0; i < alive.length; i++) {
+    for (let j = i + 1; j < alive.length; j++) {
+      const a = alive[i].position;
+      const b = alive[j].position;
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const d = Math.hypot(dx, dz);
+      if (d >= minDist || d < 0.05) continue;
+      const push = (minDist - d) * 0.45;
+      a.x -= (dx / d) * push;
+      a.z -= (dz / d) * push;
+      b.x += (dx / d) * push;
+      b.z += (dz / d) * push;
     }
   }
 }
 
 /**
- * Role-aware burst fire.
  * @param {Enemy} enemy
  * @param {Vec3} targetPos
  * @param {number} dist
  * @param {number} dt
  * @param {(from: Vec3, to: Vec3, isBluefor: boolean, shooterId: string) => void} onFireBullet
  * @param {{ playEnemyAKFire: () => void }} audio
+ * @param {((from: {x:number, z:number}, to: {x:number, z:number}) => boolean)|undefined} hasLineOfSight
  */
-function applyFire(enemy, targetPos, dist, dt, onFireBullet, audio) {
-  enemy.shootCooldown = (enemy.shootCooldown ?? 1.0) - dt;
-  if (enemy.shootCooldown > 0 || dist >= ENGAGE_RANGE) return;
+function applyFire(enemy, targetPos, dist, dt, onFireBullet, audio, hasLineOfSight) {
+  enemy.shootCooldown = (enemy.shootCooldown ?? 0.35) - dt;
+  if (dist >= ENGAGE_RANGE) {
+    enemy.seekingAngle = false;
+    return;
+  }
+
+  const blocked =
+    !!hasLineOfSight &&
+    !hasLineOfSight({ x: enemy.position.x, z: enemy.position.z }, { x: targetPos.x, z: targetPos.z });
+  enemy.seekingAngle = blocked;
+  if (blocked) {
+    if (enemy.shootCooldown < 0.12) enemy.shootCooldown = 0.12;
+    return;
+  }
+  if (enemy.shootCooldown > 0) return;
 
   const isRPK = enemy.role.includes('RPK');
   const isSVD = enemy.role.includes('SVD');
-  enemy.burstRemaining = enemy.burstRemaining || (isRPK ? 6 : isSVD ? 1 : 3);
+  if (!enemy.burstRemaining) enemy.burstRemaining = isRPK ? 7 : isSVD ? 2 : 4;
 
   audio.playEnemyAKFire();
 
-  const spread = isSVD ? 0.35 : isRPK ? 1.4 : 0.8;
+  const spread = isSVD ? 0.24 : isRPK ? 1.05 : 0.5;
   const spreadX = (Math.random() - 0.5) * spread;
   const spreadZ = (Math.random() - 0.5) * spread;
 
   onFireBullet(
-    { x: enemy.position.x, y: 0.9, z: enemy.position.z },
-    { x: targetPos.x + spreadX, y: 0.9, z: targetPos.z + spreadZ },
+    { x: enemy.position.x, y: (enemy.position.y || 0) + 1.15, z: enemy.position.z },
+    { x: targetPos.x + spreadX, y: (targetPos.y || 0) + 1.15, z: targetPos.z + spreadZ },
     false,
     enemy.id
   );
 
   enemy.burstRemaining -= 1;
   if (enemy.burstRemaining > 0) {
-    enemy.shootCooldown = 0.1;
+    enemy.shootCooldown = isRPK ? 0.08 : isSVD ? 0.16 : 0.1;
   } else {
-    enemy.shootCooldown = isRPK ? 1.4 : isSVD ? 2.2 : 1.6 + Math.random() * 0.8;
-    enemy.burstRemaining = isRPK ? 6 : isSVD ? 1 : 3;
+    enemy.shootCooldown = isRPK ? 1.05 : isSVD ? 1.35 : 0.95 + Math.random() * 0.3;
+    enemy.burstRemaining = isRPK ? 7 : isSVD ? 2 : 4;
   }
 }
 
 /**
- * Occasional peer-local combat bark (not commander directives).
  * @param {Enemy} enemy
  * @param {(speaker: string, callsign: string, text: string, isBluefor: boolean) => void} [broadcastBark]
  */
 function maybeBark(enemy, broadcastBark) {
-  if (!broadcastBark || Math.random() > 0.04) return;
+  if (!broadcastBark || Math.random() > 0.06) return;
 
   const lines =
-    enemy.state === 'suppress' || enemy.state === 'overwatch'
-      ? ['Laying fire! Pin them!', 'Suppressing contact!', 'Keep their heads down!']
+    enemy.state === 'suppress'
+      ? ['Walking fire — push under it!', 'Pin them, we are closing!', 'Do not let them move!']
       : enemy.state === 'flank_left' || enemy.state === 'flank_right'
-        ? ['Moving on the flank!', 'Wrapping their side!', 'Pushing lateral!']
-        : ['Advancing!', 'Closing distance!', 'Push up!'];
+        ? ['Flank is committed — cut them off!', 'On their blind side, rushing!', 'Close the pocket!']
+        : enemy.health <= 45
+          ? ['Still in the fight — on them!', 'Wounded and closing!', 'No break, finish it!']
+          : ['Assaulting now!', 'On the target, do not stall!', 'Kill them where they stand!'];
 
   broadcastBark(enemy.id, enemy.callsign || enemy.name, lines[Math.floor(Math.random() * lines.length)], false);
 }
@@ -268,7 +355,7 @@ function maybeBark(enemy, broadcastBark) {
  * @param {{
  *   dt: number,
  *   enemies: Enemy[],
- *   friendlies: { position: Vec3, status?: string }[],
+ *   friendlies: { position: Vec3, status?: string, health?: number }[],
  *   playerPos: Vec3,
  *   blackboard?: {
  *     activeSuppressorId: string|null,
@@ -280,35 +367,57 @@ function maybeBark(enemy, broadcastBark) {
  *   onFireBullet: (from: Vec3, to: Vec3, isBluefor: boolean, shooterId: string) => void,
  *   audio: { playEnemyAKFire: () => void },
  *   broadcastBark?: (speaker: string, callsign: string, text: string, isBluefor: boolean) => void,
+ *   hasLineOfSight?: (from: {x:number, z:number}, to: {x:number, z:number}) => boolean,
  * }} ctx
  */
 export function updateEnemySquad(ctx) {
-  const { dt, enemies, friendlies, playerPos, blackboard, onFireBullet, audio, broadcastBark } = ctx;
+  const { dt, enemies, friendlies, playerPos, blackboard, onFireBullet, audio, broadcastBark, hasLineOfSight } = ctx;
 
   const alive = enemies.filter((e) => e.health > 0);
   if (alive.length === 0) return;
 
   const aliveFriendlies = friendlies.filter((f) => f.status !== 'KIA');
-  const peers = electPeerRoles(alive, playerPos);
+  const candidates = buildPrey(playerPos, aliveFriendlies);
+
+  let cx = 0;
+  let cz = 0;
+  for (const e of alive) {
+    cx += e.position.x;
+    cz += e.position.z;
+  }
+  cx /= alive.length;
+  cz /= alive.length;
+
+  let squadPrey = scorePrey({ x: cx, y: 0, z: cz }, candidates[0]);
+  for (let i = 1; i < candidates.length; i++) {
+    const scored = scorePrey({ x: cx, y: 0, z: cz }, candidates[i]);
+    if (scored.score > squadPrey.score) squadPrey = scored;
+  }
+
+  const peers = electPeerRoles(alive, squadPrey.pos);
 
   if (blackboard) {
     blackboard.activeSuppressorId = peers.suppressorId;
     blackboard.activeFlankerId = peers.flankerId;
-    blackboard.playerLastKnownPosition = { ...playerPos };
+    blackboard.playerLastKnownPosition = { ...squadPrey.pos };
     blackboard.playerVisible = true;
     blackboard.timeSincePlayerSpotted = 0;
   }
 
-  for (const enemy of alive) {
-    const { pos: focus, dist } = pickFocus(enemy, playerPos, aliveFriendlies);
+  alive.forEach((enemy, index) => {
+    const focusHit = pickFocus(enemy, squadPrey, candidates);
+    const focus = focusHit.pos;
+    const dist = focusHit.dist ?? dist2(enemy.position, focus);
     const dx = focus.x - enemy.position.x;
     const dz = focus.z - enemy.position.z;
 
     enemy.rotationY = Math.atan2(dx, dz);
-    enemy.state = decideState(enemy, peers, focus, dist);
+    enemy.state = decideState(enemy, peers, focus, dist, index, alive.length);
 
-    applyFire(enemy, focus, dist, dt, onFireBullet, audio);
-    applyMovement(enemy, focus, dist, dt, alive);
+    applyFire(enemy, focus, dist, dt, onFireBullet, audio, hasLineOfSight);
+    applyMovement(enemy, focus, dist, dt);
     maybeBark(enemy, broadcastBark);
-  }
+  });
+
+  separatePack(alive);
 }
