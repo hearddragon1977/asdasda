@@ -247,12 +247,18 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     lastShotTime.current = now;
 
     tacticalAudio.init();
+    audioManager.init();
     const fx = playerEquipment.getAttachmentEffects();
     const muzzle = {
       x: world.playerGroup.position.x,
       y: 0.9,
       z: world.playerGroup.position.z,
     };
+    audioManager.setListenerFromPlayer(
+      muzzle.x,
+      muzzle.z,
+      world.playerGroup.rotation.y
+    );
     audioManager.playGunfire({
       muzzle,
       target: { x: world.aimPoint.x, y: 0.9, z: world.aimPoint.z },
@@ -278,6 +284,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     if (!containerRef.current) return;
 
     tacticalAudio.init();
+    audioManager.init();
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
     world.setGodMode(godMode);
@@ -460,7 +467,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
                 anatomySim.inflictTrauma(hitZone);
               }
               suppressionSystem.registerImpact('hit', damageScale);
-              tacticalAudio.playBulletCrack();
+              audioManager.playSonicCrack(
+                { x: playerPos.x, y: 1.0, z: playerPos.z },
+                'ak47',
+                { missDistance: 0.4, intensity: 1.2 }
+              );
               onVitalsChanged();
         
 
@@ -470,7 +481,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
                 if (enemy) enemy.kills += 1;
               }
             } else {
-              tacticalAudio.playBulletCrack();
+              audioManager.playSonicCrack(
+                { x: playerPos.x, y: 1.0, z: playerPos.z },
+                'ak47',
+                { missDistance: 0.5, intensity: 1.0 }
+              );
             }
           },
           (friendlyId, enemyShooterId) => {
