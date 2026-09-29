@@ -549,8 +549,6 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
           suppressionVeilRef.current.style.backdropFilter = `blur(${stress.blurPx.toFixed(1)}px)`;
         }
 
-=======
-
         // Render Live Mini-Radar
         renderMiniRadar(world.playerGroup.position, world.playerGroup.rotation.y);
       } else {
