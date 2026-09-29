@@ -5,6 +5,7 @@ import { TopoMapModal } from './components/TopoMapModal';
 import { PauseMenuModal } from './components/PauseMenuModal';
 import { CasevacSequence } from './components/CasevacSequence';
 import { RosterModal } from './components/RosterModal';
+import { InventoryModal } from './components/InventoryModal';
 
 import {
   AnatomicalWound,
@@ -12,6 +13,7 @@ import {
   FriendlyCombatant,
   PlayerVitals,
   WeaponState,
+  InventoryState,
   CasevacState,
   OperatorRecord,
 } from './types/game';
@@ -20,6 +22,9 @@ import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
+import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, switchWeaponSlot, syncWeaponIntoInventory } from './data/inventory.js';
+import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
+import { equipmentManager, playerEquipment } from './systems/equipment.js';
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
   CasualtyReportRecord,
@@ -61,19 +66,15 @@ function TacticalAppContent() {
     'OPFOR insurgents advancing through perimeter berms',
   ]);
 
-  // Weapon state (Authentic M4A1 30-round mag)
-  const [weapon, setWeapon] = useState<WeaponState>({
-    currentMagRounds: 30,
-    chambered: true,
-    reserveMags: [30, 30, 24, 18],
-    isReloading: false,
-    isInspectingMag: false,
-    magCheckInspectionText: null,
-    aimingDownSights: false,
-    tacticalLaser: true,
-    tacticalLight: false,
-    dryFired: false,
-  });
+  const [inventory, setInventory] = useState<InventoryState>(() => createDefaultInventory());
+  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
+  const [weapon, setWeapon] = useState<WeaponState>(() =>
+    playerEquipment.applyToWeaponState(getActiveWeaponState(createDefaultInventory())) as WeaponState
+  );
+  const weaponLive = useRef(weapon);
+  const inventoryLive = useRef(inventory);
+  weaponLive.current = weapon;
+  inventoryLive.current = inventory;
 
   // CASEVAC 9-Line State
   const [casevac, setCasevac] = useState<CasevacState>({
@@ -107,7 +108,23 @@ function TacticalAppContent() {
     setGodMode((prev) => !prev);
   }, []);
 
-  // Global key bindings: 'G' for God mode, 'Tab' for Scoreboard, 'M' for Map, 'Escape' for Pause
+  const applyLoadout = useCallback((next: { inventory: InventoryState; weapon: WeaponState }) => {
+    if (next.inventory.helmetId) playerEquipment.equip(next.inventory.helmetId);
+    else playerEquipment.unequip('helmet');
+    if (next.inventory.vestId) playerEquipment.equip(next.inventory.vestId);
+    else playerEquipment.unequip('vest');
+    if (next.inventory.backpackId) playerEquipment.equip(next.inventory.backpackId);
+    else playerEquipment.unequip('backpack');
+    setInventory(next.inventory);
+    setWeapon(playerEquipment.applyToWeaponState(next.weapon) as WeaponState);
+  }, []);
+
+  const openInventory = useCallback(() => {
+    setInventory(syncWeaponIntoInventory(inventoryLive.current, weaponLive.current));
+    setIsInventoryOpen(true);
+  }, []);
+
+  // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'Escape' for Pause
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
       if (e.key === 'g' || e.key === 'G') {
@@ -115,7 +132,12 @@ function TacticalAppContent() {
       }
       if (e.key === 'Tab') {
         e.preventDefault();
-        setIsScoreboardOpen((prev) => !prev);
+        if (document.pointerLockElement) document.exitPointerLock();
+        setIsPauseMenuOpen((prev) => {
+          const next = !prev;
+          setIsPaused(next);
+          return next;
+        });
       }
       if (e.key === 'm' || e.key === 'M') {
         setIsMapOpen((prev) => !prev);
@@ -127,10 +149,22 @@ function TacticalAppContent() {
           return next;
         });
       }
+      if (e.key === 'i' || e.key === 'I') {
+        setInventory(syncWeaponIntoInventory(inventoryLive.current, weaponLive.current));
+        setIsInventoryOpen(true);
+      }
+      if (e.key === '1' || e.key === '2') {
+        const swapped = switchWeaponSlot(
+          inventoryLive.current,
+          weaponLive.current,
+          e.key === '1' ? 'primary' : 'sidearm'
+        );
+        if (swapped) applyLoadout(swapped);
+      }
     };
     window.addEventListener('keydown', handleGlobalKey);
     return () => window.removeEventListener('keydown', handleGlobalKey);
-  }, [handleToggleGodMode]);
+  }, [handleToggleGodMode, applyLoadout]);
 
   // Firebase Real-time Synchronization
   useEffect(() => {
@@ -209,7 +243,7 @@ function TacticalAppContent() {
       setPlayerKills((prev) => prev + 1);
       setKillFeed((prev) => [
         ...prev,
-        `${activeOperator.callsign} neutralized ${enemyName} with M4A1`,
+        `${activeOperator.callsign} neutralized ${enemyName} with ${(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).shortName}`,
       ]);
     } else {
       const friendly = aiDirector.friendlies.find((f) => f.id === shooterId);
@@ -250,17 +284,12 @@ function TacticalAppContent() {
       message: '',
       squadMembers: [],
     });
-    // Respawn Friendly AI squad with full health and full combat readiness
-    aiDirector.spawnFriendlySquad({ x: 0, z: 0 });
+    // Respawn Friendly AI squad on BLUEFOR staging pad with full combat readiness
+    aiDirector.spawnFriendlySquad();
     setFriendlies([...aiDirector.friendlies]);
-    // Replenish weapon ammunition
-    setWeapon((prev) => ({
-      ...prev,
-      isReloading: false,
-      currentMagRounds: 30,
-      reserveRounds: 120,
-      reserveMags: [30, 30, 30, 30],
-    }));
+    equipmentManager.resetPlayer();
+    const replenished = replenishInventoryAmmo(inventoryLive.current);
+    applyLoadout(replenished);
     handleVitalsChanged();
   };
 
@@ -447,7 +476,11 @@ function TacticalAppContent() {
             Tactical Trauma Simulator
           </span>
           <span className="hidden sm:inline text-xs font-mono text-emerald-400">
-            · M4A1 (800 RPM) · WAVE {currentWave}
+            · {(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).shortName} (
+            {(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).fireRateRpm > 0
+              ? `${(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).fireRateRpm} RPM`
+              : 'SEMI'}
+            ) · WAVE {currentWave}
           </span>
         </div>
 
@@ -456,7 +489,7 @@ function TacticalAppContent() {
             onClick={() => setIsScoreboardOpen(true)}
             className="hover:text-amber-400 transition-colors cursor-pointer"
           >
-            Scoreboard [TAB]
+            Scoreboard
           </button>
           <span>·</span>
           <button
@@ -473,7 +506,7 @@ function TacticalAppContent() {
             }}
             className="hover:text-amber-400 transition-colors cursor-pointer text-sky-400 font-bold"
           >
-            Menu [ESC]
+            Menu [TAB]
           </button>
         </nav>
 
@@ -539,6 +572,8 @@ function TacticalAppContent() {
           onFriendlyDown={handleFriendlyDown}
           onPlayerPositionChanged={setPlayerPos}
           onSquadStateChanged={handleSquadSync}
+          onOpenInventory={openInventory}
+          loadoutOpen={isInventoryOpen}
         />
 
         {/* AI CASEVAC 9-Line Extraction Panel & After-Action Report (Reveals health & trauma only upon extraction or DIA!) */}
@@ -595,6 +630,18 @@ function TacticalAppContent() {
           }}
           godMode={godMode}
           onToggleGodMode={handleToggleGodMode}
+          onOpenInventory={() => {
+            setIsPauseMenuOpen(false);
+            openInventory();
+          }}
+        />
+
+        <InventoryModal
+          isOpen={isInventoryOpen}
+          onClose={() => setIsInventoryOpen(false)}
+          inventory={inventory}
+          weapon={weapon}
+          onChangeLoadout={applyLoadout}
         />
 
         {/* Operator Personnel Dossier & Permadeath Memorial */}
