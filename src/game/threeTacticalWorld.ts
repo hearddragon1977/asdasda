@@ -1,5 +1,14 @@
 import * as THREE from 'three';
 import { EnemyCombatant, FriendlyCombatant } from '../types/game';
+import type { CoverPropKind } from '../systems/mapGenerator';
+import { tacticalLayout } from '../systems/mapGenerator';
+import {
+  createCoverMaterials,
+  createProceduralCover,
+  disposeOwnedGeometries,
+  structuralAssets,
+  type CoverMaterialLibrary,
+} from '../systems/assetLoader';
 
 export interface TacticalProjectile {
   mesh: THREE.Mesh;
@@ -10,10 +19,12 @@ export interface TacticalProjectile {
   shooterId: string;
 }
 
+export type TacticalCoverKind = CoverPropKind | 'wall' | 'perimeter';
+
 export interface TacticalObstacle {
   id: string;
-  mesh: THREE.Mesh;
-  type: 'crate' | 'wall' | 'perimeter';
+  mesh: THREE.Object3D;
+  type: TacticalCoverKind;
   pos: { x: number; y: number; z: number };
   vel: { x: number; z: number };
   size: { x: number; y: number; z: number };
@@ -31,6 +42,26 @@ export class ThreeTacticalWorld {
   public playerGroup: THREE.Group;
   public barrelMesh: THREE.Mesh;
   public godModeRing: THREE.Mesh;
+  public tacticalLight: THREE.SpotLight;
+  private baseFov = 72;
+  private propUpgradeCancels: Array<() => void> = [];
+  private city: CityCollision | null = null;
+  private characterTemplate: THREE.Object3D | null = null;
+  private playerVelocity = new THREE.Vector3();
+  private playerOnGround = true;
+  private playerCollider = new Capsule(new THREE.Vector3(0, 0.35, 22), new THREE.Vector3(0, 1.5, 22), 0.3);
+  private spawnPoint = new THREE.Vector3(0, 0, 22);
+  private lookYaw = 0;
+  private lookPitch = 0;
+  private swayX = 0;
+  private swayZ = 0;
+  private disposed = false;
+  private readonly localActorLayer = 1;
+  private playerAnimator: NightfangAnimator | null = null;
+  private adsActive = false;
+  public onMapReady?: (layout: CitySpawnLayout) => void;
+  public onMapFailed?: (message: string) => void;
+
 
   // Ground & Grid
   public groundMesh: THREE.Mesh;
@@ -53,8 +84,30 @@ export class ThreeTacticalWorld {
   public lastMouseNorm: { x: number; y: number } = { x: 0, y: 0 };
 
   private resizeObserver: ResizeObserver | null = null;
+  private disposed = false;
+  private propUnsubs: Array<() => void> = [];
+  private sharedGeometries: THREE.BufferGeometry[] = [];
+  private sharedMaterials: THREE.Material[] = [];
+  private coverMaterials: CoverMaterialLibrary | null = null;
+  private friendlyBodyGeo!: THREE.BoxGeometry;
+  private friendlyBodyMat!: THREE.MeshStandardMaterial;
+  private friendlyBarrelGeo!: THREE.BoxGeometry;
+  private friendlyBarrelMat!: THREE.MeshStandardMaterial;
+  private enemyBodyGeo!: THREE.SphereGeometry;
+  private enemyBodyMat!: THREE.MeshStandardMaterial;
+  private commanderRingGeo!: THREE.TorusGeometry;
+  private commanderRingMat!: THREE.MeshBasicMaterial;
+  private bulletGeoBlue!: THREE.SphereGeometry;
+  private bulletGeoHostile!: THREE.SphereGeometry;
+  private bulletMatPlayer!: THREE.MeshBasicMaterial;
+  private bulletMatFriendly!: THREE.MeshBasicMaterial;
+  private bulletMatHostile!: THREE.MeshBasicMaterial;
 
   constructor(container: HTMLDivElement) {
+    if (!container) {
+      throw new Error('Tactical viewport container is missing.');
+    }
+    this.initSharedResources();
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x0f172a);
 
@@ -67,10 +120,11 @@ export class ThreeTacticalWorld {
     this.camera.lookAt(0, 0, 0);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
 
     const canvas = this.renderer.domElement;
     canvas.style.position = 'absolute';
@@ -116,10 +170,13 @@ export class ThreeTacticalWorld {
     this.groundMesh = new THREE.Mesh(groundGeo, groundMat);
     this.groundMesh.rotation.x = -Math.PI / 2;
     this.groundMesh.receiveShadow = true;
+    this.groundMesh.userData.ownsGeometry = true;
     this.scene.add(this.groundMesh);
+    this.sharedMaterials.push(groundMat);
 
     this.gridHelper = new THREE.GridHelper(96, 48, 0x94a3b8, 0x475569);
     this.gridHelper.position.y = 0.02;
+    this.gridHelper.userData.ownsGeometry = true;
     this.scene.add(this.gridHelper);
 
     // 3. Player: Bright Green Box + Directional Aim Barrel
@@ -135,7 +192,9 @@ export class ThreeTacticalWorld {
     });
     this.playerMesh = new THREE.Mesh(playerGeo, playerMat);
     this.playerMesh.castShadow = true;
+    this.playerMesh.userData.ownsGeometry = true;
     this.playerGroup.add(this.playerMesh);
+    this.sharedMaterials.push(playerMat);
 
     // Aim Barrel pointing in positive Z direction of local group
     const barrelGeo = new THREE.BoxGeometry(0.35, 0.35, 1.4);
@@ -148,7 +207,20 @@ export class ThreeTacticalWorld {
     this.barrelMesh = new THREE.Mesh(barrelGeo, barrelMat);
     this.barrelMesh.position.set(0, 0.3, 1.0);
     this.barrelMesh.castShadow = true;
+    this.barrelMesh.userData.ownsGeometry = true;
     this.playerGroup.add(this.barrelMesh);
+    this.sharedMaterials.push(barrelMat);
+
+    // Weapon tactical flashlight — casts a dynamic beam when activated
+    this.tacticalSpot = new THREE.SpotLight(0xfff2cc, 0, 40, THREE.MathUtils.degToRad(28), 0.45, 1.2);
+    this.tacticalSpot.position.set(0, 0.35, 1.35);
+    this.tacticalSpot.castShadow = true;
+    this.tacticalSpotVisibleGuard();
+    this.tacticalSpotTarget = new THREE.Object3D();
+    this.tacticalSpotTarget.position.set(0, 0.2, 12);
+    this.playerGroup.add(this.tacticalSpotTarget);
+    this.tacticalSpot.target = this.tacticalSpotTarget;
+    this.playerGroup.add(this.tacticalSpot);
 
     // God Mode Shield Ring
     const ringGeo = new THREE.RingGeometry(1.5, 1.8, 32);
@@ -157,7 +229,9 @@ export class ThreeTacticalWorld {
     this.godModeRing.rotation.x = Math.PI / 2;
     this.godModeRing.position.y = 0.05;
     this.godModeRing.visible = false;
+    this.godModeRing.userData.ownsGeometry = true;
     this.playerGroup.add(this.godModeRing);
+    this.sharedMaterials.push(ringMat);
 
     this.scene.add(this.playerGroup);
 
@@ -179,76 +253,106 @@ export class ThreeTacticalWorld {
     }
   }
 
+  private initSharedResources(): void {
+    this.coverMaterials = createCoverMaterials();
+    this.sharedMaterials.push(...Object.values(this.coverMaterials));
+
+    this.friendlyBodyGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+    this.friendlyBodyMat = new THREE.MeshStandardMaterial({
+      color: 0x38bdf8,
+      roughness: 0.25,
+      emissive: 0x0284c7,
+      emissiveIntensity: 0.5,
+    });
+    this.friendlyBarrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
+    this.friendlyBarrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
+    this.enemyBodyGeo = new THREE.SphereGeometry(1.0, 24, 24);
+    this.enemyBodyMat = new THREE.MeshStandardMaterial({
+      color: 0xef4444,
+      roughness: 0.2,
+      emissive: 0xdc2626,
+      emissiveIntensity: 0.6,
+    });
+    this.commanderRingGeo = new THREE.TorusGeometry(1.0, 0.14, 12, 24);
+    this.commanderRingMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+    this.bulletGeoBlue = new THREE.SphereGeometry(0.35, 10, 10);
+    this.bulletGeoHostile = new THREE.SphereGeometry(0.4, 10, 10);
+    this.bulletMatPlayer = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
+    this.bulletMatFriendly = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    this.bulletMatHostile = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+
+    this.sharedGeometries.push(
+      this.friendlyBodyGeo,
+      this.friendlyBarrelGeo,
+      this.enemyBodyGeo,
+      this.commanderRingGeo,
+      this.bulletGeoBlue,
+      this.bulletGeoHostile
+    );
+    this.sharedMaterials.push(
+      this.friendlyBodyMat,
+      this.friendlyBarrelMat,
+      this.enemyBodyMat,
+      this.commanderRingMat,
+      this.bulletMatPlayer,
+      this.bulletMatFriendly,
+      this.bulletMatHostile
+    );
+  }
+
   // --- PHYSICAL OBSTACLES: EVERY COLLISION OBJECT HAS A 1:1 VISIBLE 3D MESH ---
   private buildPhysicalCompound(): void {
-    // 1. Movable Wood Supply Crates
-    const crateGeo = new THREE.BoxGeometry(2.2, 1.8, 2.2);
-    const crateMat = new THREE.MeshStandardMaterial({
-      color: 0xd97706, // Warm wood orange-amber
-      roughness: 0.5,
-      metalness: 0.1,
-    });
+    this.buildGeneratedCover();
+    this.buildPerimeter();
+    this.buildWatchtowers();
+  }
 
-    const crateLocations = [
-      [-14, -14], [14, -14], [-16, 14], [16, 14], [-24, -2], [24, -2]
-    ];
+  private buildGeneratedCover(): void {
+    const placements = tacticalLayout?.placements ?? [];
+    for (const placement of placements) {
+      if (!placement?.position || !placement.size) continue;
+      const visual = createProceduralCover(placement.kind, placement.size, this.coverMaterials);
+      visual.position.set(placement.position.x, placement.position.y, placement.position.z);
+      visual.rotation.y = placement.rotationY || 0;
+      this.scene.add(visual);
 
-    crateLocations.forEach(([x, z], idx) => {
-      const crateMesh = new THREE.Mesh(crateGeo, crateMat);
-      crateMesh.position.set(x, 0.9, z);
-      crateMesh.castShadow = true;
-      crateMesh.receiveShadow = true;
-      this.scene.add(crateMesh);
-
-      this.obstacles.push({
-        id: `crate_${idx}`,
-        mesh: crateMesh,
-        type: 'crate',
-        pos: { x, y: 0.9, z },
+      const swapped = Math.abs(Math.sin(visual.rotation.y)) > 0.5;
+      const obstacle: TacticalObstacle = {
+        id: placement.id,
+        mesh: visual,
+        type: placement.kind,
+        pos: { x: placement.position.x, y: placement.position.y, z: placement.position.z },
         vel: { x: 0, z: 0 },
-        size: { x: 2.2, y: 1.8, z: 2.2 },
-        movable: true,
-        mass: 50,
+        size: {
+          x: swapped ? placement.size.z : placement.size.x,
+          y: placement.size.y,
+          z: swapped ? placement.size.x : placement.size.z,
+        },
+        movable: placement.movable,
+        mass: placement.mass > 0 ? placement.mass : 50,
+      };
+      this.obstacles.push(obstacle);
+
+      if (!placement.glbKey) continue;
+      const cancel = structuralAssets.requestUpgrade(placement.glbKey, placement.size, (imported) => {
+        if (this.disposed || !imported) return;
+        imported.position.copy(visual.position);
+        imported.rotation.copy(visual.rotation);
+        this.scene.add(imported);
+        this.scene.remove(visual);
+        disposeOwnedGeometries(visual);
+        if (obstacle.mesh === visual) obstacle.mesh = imported;
       });
-    });
+      this.propUnsubs.push(cancel);
+    }
+  }
 
-    // 2. Concrete Blast Walls (Solid Axis-Aligned Cover)
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.7 });
-
-    const solidWalls = [
-      { x: -14, z: -24, sx: 10, sy: 1.8, sz: 1.4 },
-      { x: 14, z: -24, sx: 10, sy: 1.8, sz: 1.4 },
-      { x: 0, z: -34, sx: 16, sy: 2.0, sz: 1.4 }, // North Bunker berm
-      { x: -28, z: -10, sx: 1.4, sy: 1.8, sz: 10 }, // West berm
-      { x: 28, z: -10, sx: 1.4, sy: 1.8, sz: 10 },  // East berm
-    ];
-
-    solidWalls.forEach((w, idx) => {
-      const geo = new THREE.BoxGeometry(w.sx, w.sy, w.sz);
-      const wallMesh = new THREE.Mesh(geo, wallMat);
-      wallMesh.position.set(w.x, w.sy / 2, w.z);
-      wallMesh.castShadow = true;
-      wallMesh.receiveShadow = true;
-      this.scene.add(wallMesh);
-
-      this.obstacles.push({
-        id: `wall_${idx}`,
-        mesh: wallMesh,
-        type: 'wall',
-        pos: { x: w.x, y: w.sy / 2, z: w.z },
-        vel: { x: 0, z: 0 },
-        size: { x: w.sx, y: w.sy, z: w.sz },
-        movable: false,
-        mass: 1000,
-      });
-    });
-
-    // 3. VISIBLE PERIMETER SECURITY WALLS AROUND ENTIRE COMPOUND (44m boundary)
-    // Clearly marks the boundary with visible concrete barriers and hazard stripes so there are ZERO invisible walls!
+  private buildPerimeter(): void {
     const perimeterMat = new THREE.MeshStandardMaterial({
       color: 0x475569,
       roughness: 0.6,
     });
+    this.sharedMaterials.push(perimeterMat);
 
     const perimeters = [
       { id: 'perim_north', x: 0, z: -44, sx: 88, sy: 2.2, sz: 1.2 },
@@ -263,6 +367,7 @@ export class ThreeTacticalWorld {
       mesh.position.set(p.x, p.sy / 2, p.z);
       mesh.castShadow = true;
       mesh.receiveShadow = true;
+      mesh.userData.ownsGeometry = true;
       this.scene.add(mesh);
 
       this.obstacles.push({
@@ -276,17 +381,21 @@ export class ThreeTacticalWorld {
         mass: 9999,
       });
     });
+  }
 
-    // Corner Watchtowers for atmospheric boundary markers
+  private buildWatchtowers(): void {
     const towerGeo = new THREE.CylinderGeometry(1.2, 1.4, 4.5, 8);
     const towerMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5 });
+    this.sharedGeometries.push(towerGeo);
+    this.sharedMaterials.push(towerMat);
     const cornerPositions = [
-      [-44, -44], [44, -44], [-44, 44], [44, 44]
+      [-44, -44], [44, -44], [-44, 44], [44, 44],
     ];
     cornerPositions.forEach(([x, z]) => {
       const tower = new THREE.Mesh(towerGeo, towerMat);
       tower.position.set(x, 2.25, z);
       tower.castShadow = true;
+      tower.userData.ownsGeometry = false;
       this.scene.add(tower);
     });
   }
@@ -313,8 +422,10 @@ export class ThreeTacticalWorld {
       obs.pos.x = Math.max(-41, Math.min(41, obs.pos.x));
       obs.pos.z = Math.max(-41, Math.min(41, obs.pos.z));
 
-      obs.mesh.position.x = obs.pos.x;
-      obs.mesh.position.z = obs.pos.z;
+      if (obs.mesh?.position) {
+        obs.mesh.position.x = obs.pos.x;
+        obs.mesh.position.z = obs.pos.z;
+      }
     }
   }
 
@@ -361,71 +472,67 @@ export class ThreeTacticalWorld {
   }
 
   // --- SYNC FRIENDLIES (BLUEFOR) ---
-  public syncFriendlies(friendlies: FriendlyCombatant[]): void {
-    const friendlyBoxGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-    const friendlyMat = new THREE.MeshStandardMaterial({
-      color: 0x38bdf8,
-      roughness: 0.25,
-      emissive: 0x0284c7,
-      emissiveIntensity: 0.5,
-    });
+  public syncFriendlies(friendlies: FriendlyCombatant[] | null | undefined): void {
+    const live = friendlies ?? [];
+    const liveIds = new Set<string>();
 
-    const barrelGeo = new THREE.BoxGeometry(0.3, 0.3, 1.3);
-    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x0369a1 });
-
-    friendlies.forEach((friendly) => {
+    live.forEach((friendly) => {
+      if (!friendly?.id) return;
+      liveIds.add(friendly.id);
       let group = this.friendlyMeshes.get(friendly.id);
       if (!group) {
         group = new THREE.Group();
-        const box = new THREE.Mesh(friendlyBoxGeo, friendlyMat);
+        const box = new THREE.Mesh(this.friendlyBodyGeo, this.friendlyBodyMat);
         box.castShadow = true;
+        box.userData.ownsGeometry = false;
         group.add(box);
 
-        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+        const barrel = new THREE.Mesh(this.friendlyBarrelGeo, this.friendlyBarrelMat);
         barrel.position.set(0, 0.25, 0.9);
+        barrel.userData.ownsGeometry = false;
         group.add(barrel);
 
         this.scene.add(group);
         this.friendlyMeshes.set(friendly.id, group);
       }
 
-      group.position.set(friendly.position.x, 0.75, friendly.position.z);
-      group.rotation.y = friendly.rotationY;
+      const px = friendly.position?.x ?? 0;
+      const pz = friendly.position?.z ?? 0;
+      group.position.set(px, 0.75, pz);
+      group.rotation.y = Number.isFinite(friendly.rotationY) ? friendly.rotationY : 0;
 
       if (friendly.status === 'KIA') {
-        group.scale.set(0.1, 0.1, 0.1);
         group.visible = false;
       } else {
         group.scale.set(1, 1, 1);
         group.visible = true;
       }
     });
+
+    this.dropMissing(this.friendlyMeshes, liveIds);
   }
 
   // --- SYNC HOSTILE ENEMIES (RED SPHERES + COMMANDER CHEVRON) ---
-  public syncEnemies(enemies: EnemyCombatant[]): void {
-    const enemyGeo = new THREE.SphereGeometry(1.0, 24, 24);
-    const enemyMat = new THREE.MeshStandardMaterial({
-      color: 0xef4444,
-      roughness: 0.2,
-      emissive: 0xdc2626,
-      emissiveIntensity: 0.6,
-    });
+  public syncEnemies(enemies: EnemyCombatant[] | null | undefined): void {
+    const live = enemies ?? [];
+    const liveIds = new Set<string>();
 
-    enemies.forEach((enemy) => {
+    live.forEach((enemy) => {
+      if (!enemy?.id) return;
+      liveIds.add(enemy.id);
       let group = this.enemyMeshes.get(enemy.id);
       if (!group) {
         group = new THREE.Group();
-        const mesh = new THREE.Mesh(enemyGeo, enemyMat);
+        const mesh = new THREE.Mesh(this.enemyBodyGeo, this.enemyBodyMat);
         mesh.castShadow = true;
+        mesh.userData.ownsGeometry = false;
         group.add(mesh);
 
         if (enemy.isCommander) {
-          const crownGeo = new THREE.TorusGeometry(1.0, 0.14, 12, 24);
-          const crownMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
-          const crown = new THREE.Mesh(crownGeo, crownMat);
+          const crown = new THREE.Mesh(this.commanderRingGeo, this.commanderRingMat);
           crown.rotation.x = Math.PI / 2;
           crown.position.y = 1.25;
+          crown.userData.ownsGeometry = false;
           group.add(crown);
         }
 
@@ -433,16 +540,26 @@ export class ThreeTacticalWorld {
         this.enemyMeshes.set(enemy.id, group);
       }
 
-      group.position.set(enemy.position.x, 1.0, enemy.position.z);
+      group.position.set(enemy.position?.x ?? 0, 1.0, enemy.position?.z ?? 0);
 
-      if (enemy.health <= 0) {
-        group.scale.set(0.1, 0.1, 0.1);
+      if ((enemy.health ?? 0) <= 0) {
         group.visible = false;
       } else {
         group.scale.set(1, 1, 1);
         group.visible = true;
       }
     });
+
+    this.dropMissing(this.enemyMeshes, liveIds);
+  }
+
+  private dropMissing(meshes: Map<string, THREE.Group>, liveIds: Set<string>): void {
+    for (const [id, group] of meshes) {
+      if (liveIds.has(id) || !group) continue;
+      this.scene.remove(group);
+      disposeOwnedGeometries(group);
+      meshes.delete(id);
+    }
   }
 
   // --- PROJECTILES & FAIR WEAPON BALLISTICS ---
@@ -458,9 +575,8 @@ export class ThreeTacticalWorld {
     }
     dir.normalize();
 
-    const bGeo = new THREE.SphereGeometry(0.35, 12, 12);
-    const bMat = new THREE.MeshBasicMaterial({ color: 0x4ade80 });
-    const mesh = new THREE.Mesh(bGeo, bMat);
+    const mesh = new THREE.Mesh(this.bulletGeoBlue, this.bulletMatPlayer);
+    mesh.userData.ownsGeometry = false;
     mesh.position.copy(origin);
     this.scene.add(mesh);
 
@@ -480,18 +596,20 @@ export class ThreeTacticalWorld {
     isBluefor: boolean,
     shooterId: string
   ): void {
+    if (!fromPos || !toPos) return;
     const from = new THREE.Vector3(fromPos.x, 0.9, fromPos.z);
     const to = new THREE.Vector3(toPos.x, 0.9, toPos.z);
+    if (!Number.isFinite(from.x) || !Number.isFinite(to.x) || !Number.isFinite(from.z) || !Number.isFinite(to.z)) return;
     const dir = new THREE.Vector3().subVectors(to, from);
     dir.y = 0;
     if (dir.lengthSq() < 0.001) return;
     dir.normalize();
 
-    const bGeo = new THREE.SphereGeometry(isBluefor ? 0.35 : 0.4, 12, 12);
-    const bMat = new THREE.MeshBasicMaterial({
-      color: isBluefor ? 0x38bdf8 : 0xf97316,
-    });
-    const mesh = new THREE.Mesh(bGeo, bMat);
+    const mesh = new THREE.Mesh(
+      isBluefor ? this.bulletGeoBlue : this.bulletGeoHostile,
+      isBluefor ? this.bulletMatFriendly : this.bulletMatHostile
+    );
+    mesh.userData.ownsGeometry = false;
     mesh.position.copy(from);
     this.scene.add(mesh);
 
@@ -507,6 +625,47 @@ export class ThreeTacticalWorld {
 
   public setGodMode(active: boolean): void {
     this.godModeRing.visible = active;
+  }
+
+  /** Ensures spotlight starts disabled (intensity 0). */
+  private tacticalSpotVisibleGuard(): void {
+    this.tacticalSpot.intensity = 0;
+  }
+
+  /**
+   * Toggle / configure the weapon-mounted tactical flashlight from
+   * equipment attachment stats (src/data/gear.js flashlight profiles).
+   */
+  public setTacticalLight(
+    enabled: boolean,
+    profile?: {
+      intensity?: number;
+      rangeM?: number;
+      coneAngleDeg?: number;
+      color?: number;
+    }
+  ): void {
+    if (!enabled) {
+      this.tacticalSpot.intensity = 0;
+      return;
+    }
+    const intensity = profile?.intensity ?? 3.2;
+    const rangeM = profile?.rangeM ?? 36;
+    const cone = profile?.coneAngleDeg ?? 28;
+    const color = profile?.color ?? 0xfff2cc;
+    this.tacticalSpot.color.setHex(color);
+    this.tacticalSpot.distance = rangeM;
+    this.tacticalSpot.angle = THREE.MathUtils.degToRad(cone);
+    this.tacticalSpot.intensity = intensity;
+    this.tacticalSpotTarget.position.set(0, 0.15, Math.max(8, rangeM * 0.45));
+  }
+
+  /**
+   * ADS zoom from equipped optic — pulls the tactical camera in and
+   * tightens FOV while aimingDownSights is active.
+   */
+  public setAdsZoom(zoomMul: number, aiming: boolean): void {
+    this.adsZoomMul = aiming ? Math.max(1, zoomMul) : 1;
   }
 
   /**
@@ -536,16 +695,23 @@ export class ThreeTacticalWorld {
 
   public render(
     dt: number,
+    onPlayerHit: (shooterId: string, damageScale?: number) => void,
+    onFriendlyHit: (friendlyId: string, shooterId: string, damageScale?: number) => void,
+    onEnemyHit: (enemyId: string, shooterId: string, damageScale?: number) => void
+
     onPlayerHit: (shooterId: string) => void,
     onFriendlyHit: (friendlyId: string, shooterId: string) => void,
     onEnemyHit: (enemyId: string, shooterId: string) => void
+
   ): void {
-    // 1. Camera Follow: Rigid 1:1 camera lock to player position
-    // Eliminates camera position lag, camera orientation tilt, and aim drift while walking!
-    this.camera.position.x = this.playerGroup.position.x;
-    this.camera.position.z = this.playerGroup.position.z + 24;
-    this.camera.position.y = 32;
-    this.camera.lookAt(this.playerGroup.position.x, 0, this.playerGroup.position.z);
+    this.playerAnimator?.update(dt);
+    this.friendlyMeshes.forEach((group) => {
+      (group.userData.animator as NightfangAnimator | undefined)?.update(dt);
+    });
+    this.enemyMeshes.forEach((group) => {
+      (group.userData.animator as NightfangAnimator | undefined)?.update(dt);
+    });
+
 
     // 2. Re-project aim raycast through locked camera so aim direction remains completely steady!
     this.updateAimFromMouse(this.lastMouseNorm.x, this.lastMouseNorm.y);
@@ -556,6 +722,10 @@ export class ThreeTacticalWorld {
     // 4. Update Projectiles & Check Collision with Entities AND Obstacles
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
+      if (!p?.mesh || !p.dir) {
+        this.projectiles.splice(i, 1);
+        continue;
+      }
       p.mesh.position.addScaledVector(p.dir, p.speed * dt);
       p.life -= dt;
 
@@ -563,6 +733,7 @@ export class ThreeTacticalWorld {
 
       // Obstacle bullet collision (Box AABB check matching 1:1 mesh)
       for (const obs of this.obstacles) {
+        if (!obs?.size || !obs.pos) continue;
         const halfX = obs.size.x / 2 + 0.15;
         const halfZ = obs.size.z / 2 + 0.15;
         if (
@@ -578,10 +749,20 @@ export class ThreeTacticalWorld {
         }
       }
 
-      if (bulletAbsorbed) {
+      if (this.city?.ready && this.city.blocksSegment(segmentStart, p.mesh.position, 0.05)) {
+        if (!p.isBluefor) {
+          suppressionSystem.registerWorldImpact(
+            { x: p.mesh.position.x, z: p.mesh.position.z },
+            { x: this.playerGroup.position.x, z: this.playerGroup.position.z }
+          );
+        }
         this.scene.remove(p.mesh);
         p.mesh.geometry.dispose();
         this.projectiles.splice(i, 1);
+
+      if (bulletAbsorbed) {
+        this.retireProjectile(i);
+
         continue;
       }
 
@@ -590,51 +771,74 @@ export class ThreeTacticalWorld {
         // Hostile bullet: Can hit Player OR Friendly AI
         const distToPlayer = p.mesh.position.distanceTo(this.playerGroup.position);
         if (distToPlayer < 1.2) {
-          this.scene.remove(p.mesh);
-          p.mesh.geometry.dispose();
-          this.projectiles.splice(i, 1);
-          onPlayerHit(p.shooterId);
+          this.retireProjectile(i);
+          if (typeof onPlayerHit === 'function') onPlayerHit(p.shooterId);
           continue;
         }
 
+        let friendlyHit = false;
         for (const [fId, fGroup] of this.friendlyMeshes.entries()) {
-          if (fGroup.visible && p.mesh.position.distanceTo(fGroup.position) < 1.2) {
-            this.scene.remove(p.mesh);
-            p.mesh.geometry.dispose();
-            this.projectiles.splice(i, 1);
-            onFriendlyHit(fId, p.shooterId);
+          if (fGroup?.visible && p.mesh.position.distanceTo(fGroup.position) < 1.2) {
+            this.retireProjectile(i);
+            if (typeof onFriendlyHit === 'function') onFriendlyHit(fId, p.shooterId);
+            friendlyHit = true;
             break;
           }
         }
+        if (friendlyHit) continue;
       } else {
         // Bluefor bullet: Hits Enemies
+        let enemyHit = false;
         for (const [eId, eGroup] of this.enemyMeshes.entries()) {
-          if (eGroup.visible && p.mesh.position.distanceTo(eGroup.position) < 1.3) {
-            this.scene.remove(p.mesh);
-            p.mesh.geometry.dispose();
-            this.projectiles.splice(i, 1);
-            onEnemyHit(eId, p.shooterId);
+          if (eGroup?.visible && p.mesh.position.distanceTo(eGroup.position) < 1.3) {
+            this.retireProjectile(i);
+            if (typeof onEnemyHit === 'function') onEnemyHit(eId, p.shooterId);
+            enemyHit = true;
             break;
           }
         }
+        if (enemyHit) continue;
       }
 
       if (p.life <= 0) {
-        this.scene.remove(p.mesh);
-        p.mesh.geometry.dispose();
-        this.projectiles.splice(i, 1);
+        this.retireProjectile(i);
       }
     }
 
     this.renderer.render(this.scene, this.camera);
   }
 
+  private retireProjectile(index: number): void {
+    const projectile = this.projectiles[index];
+    if (!projectile) return;
+    if (projectile.mesh) this.scene.remove(projectile.mesh);
+    this.projectiles.splice(index, 1);
+  }
+
   public destroy(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    for (const cancel of this.propUnsubs) cancel();
+    this.propUnsubs = [];
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
-    this.renderer.dispose();
+    for (const projectile of this.projectiles) {
+      if (projectile?.mesh) this.scene.remove(projectile.mesh);
+    }
+    this.projectiles = [];
+    this.friendlyMeshes.clear();
+    this.enemyMeshes.clear();
+    this.obstacles = [];
+    disposeOwnedGeometries(this.scene);
+    for (const geometry of this.sharedGeometries) geometry.dispose();
+    for (const material of this.sharedMaterials) material.dispose();
+    this.sharedGeometries = [];
+    this.sharedMaterials = [];
+    this.coverMaterials = null;
     this.scene.clear();
+    this.renderer.dispose();
+    this.renderer.domElement?.remove();
   }
 }

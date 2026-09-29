@@ -72,6 +72,11 @@ export type WeaponCategory =
   | 'smg'
   | 'pistol';
 export type FireMode = 'semi' | 'burst' | 'auto' | 'bolt';
+export type WeaponEquipSlot = 'primary' | 'sidearm';
+export type GearSlot = 'helmet' | 'vest' | 'backpack';
+export type EquipmentSlot = WeaponEquipSlot | GearSlot;
+export type AttachmentSlot = 'optic' | 'flashlight' | 'muzzle';
+export type GearReticle = 'iron' | 'red_dot' | 'holo' | 'lpvo' | 'acog' | 'scope';
 
 export interface DamageScaling {
   baseDamage: number;
@@ -83,7 +88,6 @@ export interface DamageScaling {
   armorPenetration: number;
 }
 
-/** Static definition from src/data/weapons.js (Afghanistan-era small arms). */
 export interface WeaponDefinition {
   id: string;
   name: string;
@@ -110,26 +114,21 @@ export interface WeaponDefinition {
   aliases?: string[];
 }
 
-export type WeaponEquipSlot = 'primary' | 'sidearm';
-export type GearSlot = 'helmet' | 'vest' | 'backpack';
-export type EquipmentSlot = WeaponEquipSlot | GearSlot;
-
 export interface GearDefinition {
   id: string;
   name: string;
   shortName: string;
   slot: GearSlot;
-  faction: WeaponFaction;
+  faction: WeaponFaction | 'Universal';
   weightKg: number;
   protection: number;
   ammoBonusMags?: number;
   mobilityPenalty?: number;
   equippable: boolean;
-  era: string;
+  era?: string;
   description: string;
 }
 
-/** Persisted ammo state for a weapon sitting in an inventory slot. */
 export interface WeaponLoadoutState {
   weaponId: string;
   currentMagRounds: number;
@@ -138,10 +137,6 @@ export interface WeaponLoadoutState {
   reserveRounds: number;
 }
 
-/**
- * Operator kit with dedicated equipment slots.
- * Primary / sidearm hold firearms; helmet / vest / backpack hold gear IDs.
- */
 export interface InventoryState {
   primary: WeaponLoadoutState | null;
   sidearm: WeaponLoadoutState | null;
@@ -152,10 +147,39 @@ export interface InventoryState {
   ownedGearIds: string[];
   activeWeaponSlot: WeaponEquipSlot;
 }
+export interface WeaponAttachmentsState {
+  opticId: string | null;
+  flashlightId: string | null;
+  muzzleId: string | null;
+}
+
+export interface EquipmentSlotsState {
+  vest: string | null;
+  helmet: string | null;
+  backpack: string | null;
+}
+
+export interface AttachmentSlotsState {
+  optic: string | null;
+  flashlight: string | null;
+  muzzle: string | null;
+}
+
+/** Snapshot of a unit's worn gear + rail devices for React / AI sync. */
+export interface UnitLoadoutState {
+  unitId: string;
+  equipment: EquipmentSlotsState;
+  attachments: AttachmentSlotsState;
+  inventory: { id: string; qty?: number }[];
+  carriedWeightKg: number;
+  capacityKg: number;
+  encumbrancePenalty: number;
+  moveSpeedMultiplier: number;
+}
 
 export interface WeaponState {
-  weaponId: string; // key into WEAPONS_BY_ID
-  currentMagRounds: number;
+  weaponId?: string;
+  currentMagRounds: number; // max 30
   chambered: boolean;
   reserveMags: number[]; // e.g. [30, 28, 15, 0]
   reserveRounds?: number; // total loose reserve rounds
@@ -166,6 +190,13 @@ export interface WeaponState {
   tacticalLaser: boolean;
   tacticalLight: boolean;
   dryFired: boolean;
+  attachments?: WeaponAttachmentsState;
+  adsZoom?: number;
+  reticle?: GearReticle | string;
+  soundSignature?: number;
+  muzzleFlashScale?: number;
+  hearingRangeMul?: number;
+  isSuppressed?: boolean;
 }
 
 export interface CasevacState {
@@ -223,7 +254,6 @@ export type EnemyAction =
   | 'flank_left'
   | 'flank_right'
   | 'retreat_heal'
-  | 'commander'
   | 'overwatch'
   | 'advance'
   | 'dead';
@@ -250,6 +280,11 @@ export interface EnemyCombatant {
   isCommander?: boolean;
   burstCount?: number;
   burstRemaining?: number;
+  reloadTimer?: number;
+  magazineSize?: number;
+  stateTimer?: number;
+  resumeState?: EnemyAction;
+  loadout?: UnitLoadoutState;
 }
 
 export interface FriendlyCombatant {
@@ -266,9 +301,12 @@ export interface FriendlyCombatant {
   shootCooldown: number;
   targetEnemyId: string | null;
   formationOffset: { x: number; z: number };
-  state: 'follow' | 'take_cover' | 'suppress' | 'bounding';
+  state: 'take_cover' | 'suppress' | 'bounding';
   isShooting: boolean;
   lastBark: string;
   lastBarkTime: number;
   currentAmmo: number;
+  reloadTimer?: number;
+  magazineSize?: number;
+  loadout?: UnitLoadoutState;
 }

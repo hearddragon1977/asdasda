@@ -13,15 +13,22 @@ import {
   FriendlyCombatant,
   PlayerVitals,
   WeaponState,
+  InventoryState,
   CasevacState,
   OperatorRecord,
-  InventoryState,
+  UnitLoadoutState,
 } from './types/game';
 
 import { anatomySim } from './game/anatomySimulation';
 import { aiDirector } from './game/aiGoap';
 import { rosterManager } from './game/rosterSystem';
 import { tacticalAudio } from './audio/tacticalAudio';
+=======
+import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, switchWeaponSlot, syncWeaponIntoInventory } from './data/inventory.js';
+import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
+
+import { equipmentManager, playerEquipment } from './systems/equipment.js';
+
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {
   CasualtyReportRecord,
@@ -71,19 +78,19 @@ function TacticalAppContent() {
     'OPFOR insurgents advancing through perimeter berms',
   ]);
 
-  // Inventory + live weapon in hands
   const [inventory, setInventory] = useState<InventoryState>(() => createDefaultInventory());
+  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
   const [weapon, setWeapon] = useState<WeaponState>(() =>
-    getActiveWeaponState(createDefaultInventory())
+    playerEquipment.applyToWeaponState(getActiveWeaponState(createDefaultInventory())) as WeaponState
   );
-  const inventoryRef = useRef(inventory);
-  const weaponRef = useRef(weapon);
-  useEffect(() => {
-    inventoryRef.current = inventory;
-  }, [inventory]);
-  useEffect(() => {
-    weaponRef.current = weapon;
-  }, [weapon]);
+  const weaponLive = useRef(weapon);
+  const inventoryLive = useRef(inventory);
+  weaponLive.current = weapon;
+  inventoryLive.current = inventory;
+
+  const [playerLoadout, setPlayerLoadout] = useState<UnitLoadoutState>(() =>
+    playerEquipment.snapshot()
+  );
 
   // CASEVAC 9-Line State
   const [casevac, setCasevac] = useState<CasevacState>({
@@ -103,41 +110,37 @@ function TacticalAppContent() {
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [isRosterOpen, setIsRosterOpen] = useState(false);
   const [isPauseMenuOpen, setIsPauseMenuOpen] = useState(false);
-  const [isInventoryOpen, setIsInventoryOpen] = useState(false);
+  const casevacTimers = useRef<number[]>([]);
 
-  const applyLoadout = useCallback(
-    (next: { inventory: InventoryState; weapon: WeaponState }) => {
-      setInventory(next.inventory);
-      setWeapon({ ...next.weapon, isReloading: false });
-    },
-    []
-  );
-
-  const openInventory = useCallback(() => {
-    // Persist live ammo into the active slot before browsing loadout
-    setInventory(syncWeaponIntoInventory(inventoryRef.current, weaponRef.current));
-    setIsInventoryOpen(true);
-    setIsPaused(true);
+  useEffect(() => {
+    return () => {
+      casevacTimers.current.forEach((timerId) => window.clearTimeout(timerId));
+      casevacTimers.current = [];
+    };
   }, []);
-
-  const closeInventory = useCallback(() => {
-    setIsInventoryOpen(false);
-    setIsPaused(isPauseMenuOpen);
-  }, [isPauseMenuOpen]);
 
   // Toggle God Mode
   const handleToggleGodMode = useCallback(() => {
     setGodMode((prev) => !prev);
   }, []);
 
-  const handleSwitchWeaponSlot = useCallback((slot: 'primary' | 'sidearm') => {
-    const result = switchWeaponSlot(inventoryRef.current, weaponRef.current, slot);
-    if (!result) return;
-    setInventory(result.inventory);
-    setWeapon({ ...result.weapon, isReloading: false });
+  const applyLoadout = useCallback((next: { inventory: InventoryState; weapon: WeaponState }) => {
+    if (next.inventory.helmetId) playerEquipment.equip(next.inventory.helmetId);
+    else playerEquipment.unequip('helmet');
+    if (next.inventory.vestId) playerEquipment.equip(next.inventory.vestId);
+    else playerEquipment.unequip('vest');
+    if (next.inventory.backpackId) playerEquipment.equip(next.inventory.backpackId);
+    else playerEquipment.unequip('backpack');
+    setInventory(next.inventory);
+    setWeapon(playerEquipment.applyToWeaponState(next.weapon) as WeaponState);
   }, []);
 
-  // Global key bindings
+  const openInventory = useCallback(() => {
+    setInventory(syncWeaponIntoInventory(inventoryLive.current, weaponLive.current));
+    setIsInventoryOpen(true);
+  }, []);
+
+  // Global key bindings: 'G' for God mode, 'Tab' for the pause menu, 'M' for Map, 'Escape' for Pause
   useEffect(() => {
     const handleGlobalKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement | null)?.tagName;
@@ -148,7 +151,12 @@ function TacticalAppContent() {
       }
       if (e.key === 'Tab') {
         e.preventDefault();
-        setIsScoreboardOpen((prev) => !prev);
+        if (document.pointerLockElement) document.exitPointerLock();
+        setIsPauseMenuOpen((prev) => {
+          const next = !prev;
+          setIsPaused(next);
+          return next;
+        });
       }
       if (e.key === 'm' || e.key === 'M') {
         if (!isInventoryOpen) setIsMapOpen((prev) => !prev);
@@ -178,17 +186,22 @@ function TacticalAppContent() {
           return next;
         });
       }
+      if (e.key === 'i' || e.key === 'I') {
+        setInventory(syncWeaponIntoInventory(inventoryLive.current, weaponLive.current));
+        setIsInventoryOpen(true);
+      }
+      if (e.key === '1' || e.key === '2') {
+        const swapped = switchWeaponSlot(
+          inventoryLive.current,
+          weaponLive.current,
+          e.key === '1' ? 'primary' : 'sidearm'
+        );
+        if (swapped) applyLoadout(swapped);
+      }
     };
     window.addEventListener('keydown', handleGlobalKey);
     return () => window.removeEventListener('keydown', handleGlobalKey);
-  }, [
-    handleToggleGodMode,
-    handleSwitchWeaponSlot,
-    isInventoryOpen,
-    isPauseMenuOpen,
-    openInventory,
-    closeInventory,
-  ]);
+  }, [handleToggleGodMode, applyLoadout]);
 
   // Firebase Real-time Synchronization
   useEffect(() => {
@@ -268,7 +281,7 @@ function TacticalAppContent() {
       setPlayerKills((prev) => prev + 1);
       setKillFeed((prev) => [
         ...prev,
-        `${activeOperator.callsign} neutralized ${enemyName} with ${gun?.shortName ?? 'firearm'}`,
+        `${activeOperator.callsign} neutralized ${enemyName} with ${(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).shortName}`,
       ]);
     } else {
       const friendly = aiDirector.friendlies.find((f) => f.id === shooterId);
@@ -302,6 +315,8 @@ function TacticalAppContent() {
 
   const handleResetTrauma = () => {
     anatomySim.reset();
+    suppressionSystem.reset();
+    tacticalAudio.setSuppressionMuffle(0);
     setCasevac({
       status: 'idle',
       smokeDeployed: false,
@@ -309,13 +324,12 @@ function TacticalAppContent() {
       message: '',
       squadMembers: [],
     });
-    // Respawn Friendly AI squad with full health and full combat readiness
-    aiDirector.spawnFriendlySquad({ x: 0, z: 0 });
+    // Respawn Friendly AI squad on BLUEFOR staging pad with full combat readiness
+    aiDirector.spawnFriendlySquad();
     setFriendlies([...aiDirector.friendlies]);
-    // Replenish ammo across equipped primary + sidearm
-    const topped = replenishInventoryAmmo(inventoryRef.current);
-    setInventory(topped.inventory);
-    setWeapon({ ...topped.weapon, isReloading: false });
+    equipmentManager.resetPlayer();
+    const replenished = replenishInventoryAmmo(inventoryLive.current);
+    applyLoadout(replenished);
     handleVitalsChanged();
   };
 
@@ -324,6 +338,12 @@ function TacticalAppContent() {
     if (casevac.status !== 'idle') return;
     tacticalAudio.init();
     tacticalAudio.playRadioSquelchChirp();
+    casevacTimers.current.forEach((timerId) => window.clearTimeout(timerId));
+    casevacTimers.current = [];
+    const queueCasevac = (delay: number, run: () => void) => {
+      const timerId = window.setTimeout(run, delay);
+      casevacTimers.current.push(timerId);
+    };
 
     setCasevac({
       status: 'calling',
@@ -333,7 +353,7 @@ function TacticalAppContent() {
       squadMembers: [],
     });
 
-    setTimeout(() => {
+    queueCasevac(2800, () => {
       tacticalAudio.playRadioSquelchChirp();
       setCasevac((prev) => ({
         ...prev,
@@ -342,9 +362,9 @@ function TacticalAppContent() {
         progress: 40,
         message: 'Dustoff-4 inbound. Marked LZ with green smoke flare! Keep perimeter clear.',
       }));
-    }, 2800);
+    });
 
-    setTimeout(() => {
+    queueCasevac(6000, () => {
       tacticalAudio.playRadioSquelchChirp();
       setCasevac((prev) => ({
         ...prev,
@@ -352,9 +372,9 @@ function TacticalAppContent() {
         progress: 70,
         message: 'Dustoff-4 boots on ground! Security team laying down suppressive fire. Medic moving to casualty!',
       }));
-    }, 6000);
+    });
 
-    setTimeout(() => {
+    queueCasevac(9500, () => {
       tacticalAudio.playRadioSquelchChirp();
       const outcome = rosterManager.processCasualtyOutcome(
         anatomySim.vitals,
@@ -464,7 +484,7 @@ function TacticalAppContent() {
           user.uid
         ).catch(() => {});
       }
-    }, 9500);
+    });
   };
 
   const handleConfirmCasualtyOutcome = () => {
@@ -496,8 +516,11 @@ function TacticalAppContent() {
             Tactical Trauma Simulator
           </span>
           <span className="hidden sm:inline text-xs font-mono text-emerald-400">
-            · {(getWeaponById(weapon.weaponId)?.shortName ?? 'UNARMED').toUpperCase()} · WAVE{' '}
-            {currentWave}
+            · {(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).shortName} (
+            {(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).fireRateRpm > 0
+              ? `${(getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON).fireRateRpm} RPM`
+              : 'SEMI'}
+            ) · WAVE {currentWave}
           </span>
         </div>
 
@@ -506,7 +529,7 @@ function TacticalAppContent() {
             onClick={() => setIsScoreboardOpen(true)}
             className="hover:text-amber-400 transition-colors cursor-pointer"
           >
-            Scoreboard [TAB]
+            Scoreboard
           </button>
           <span>·</span>
           <button
@@ -523,7 +546,7 @@ function TacticalAppContent() {
             }}
             className="hover:text-amber-400 transition-colors cursor-pointer text-sky-400 font-bold"
           >
-            Menu [ESC]
+            Menu [TAB]
           </button>
         </nav>
 
@@ -601,6 +624,8 @@ function TacticalAppContent() {
           onFriendlyDown={handleFriendlyDown}
           onPlayerPositionChanged={setPlayerPos}
           onSquadStateChanged={handleSquadSync}
+          onOpenInventory={openInventory}
+          loadoutOpen={isInventoryOpen}
         />
 
         {/* AI CASEVAC 9-Line Extraction Panel & After-Action Report (Reveals health & trauma only upon extraction or DIA!) */}
@@ -662,6 +687,18 @@ function TacticalAppContent() {
           }}
           godMode={godMode}
           onToggleGodMode={handleToggleGodMode}
+          onOpenInventory={() => {
+            setIsPauseMenuOpen(false);
+            openInventory();
+          }}
+        />
+
+        <InventoryModal
+          isOpen={isInventoryOpen}
+          onClose={() => setIsInventoryOpen(false)}
+          inventory={inventory}
+          weapon={weapon}
+          onChangeLoadout={applyLoadout}
         />
 
         {/* Equippable loadout: primary / sidearm / helmet / vest / backpack */}

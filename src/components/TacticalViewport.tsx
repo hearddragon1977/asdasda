@@ -4,17 +4,13 @@ import { ThreeTacticalWorld } from '../game/threeTacticalWorld';
 import { anatomySim } from '../game/anatomySimulation';
 import { aiDirector } from '../game/aiGoap';
 import { tacticalAudio } from '../audio/tacticalAudio';
-import {
-  EnemyCombatant,
-  FriendlyCombatant,
-  WeaponEquipSlot,
-  WeaponState,
-} from '../types/game';
-import {
-  DEFAULT_PLAYER_WEAPON,
-  getShotIntervalMs,
-  getWeaponById,
-} from '../data/weapons.js';
+import { suppressionSystem } from '../systems/suppression.js';
+import { EnemyCombatant, FriendlyCombatant, WeaponState } from '../types/game';
+import { DEFAULT_PLAYER_WEAPON, getProjectileSpeed, getShotIntervalMs, getWeaponById } from '../data/weapons.js';
+import { audioManager } from '../systems/audio.js';
+import { equipmentManager, playerEquipment } from '../systems/equipment.js';
+import { suppressionSystem } from '../systems/suppression.js';
+        
 
 interface TacticalViewportProps {
   weapon: WeaponState;
@@ -37,6 +33,9 @@ interface TacticalViewportProps {
   onFriendlyDown: (friendlyId: string, killerId: string) => void;
   onPlayerPositionChanged?: (pos: { x: number; z: number; rotationY: number }) => void;
   onSquadStateChanged?: (friendlies: FriendlyCombatant[], enemies: EnemyCombatant[]) => void;
+  onOpenInventory?: () => void;
+  loadoutOpen?: boolean;
+        
 }
 
 export const TacticalViewport: React.FC<TacticalViewportProps> = ({
@@ -60,6 +59,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   onFriendlyDown,
   onPlayerPositionChanged,
   onSquadStateChanged,
+  onOpenInventory,
+  loadoutOpen = false,
+
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<ThreeTacticalWorld | null>(null);
@@ -68,7 +70,32 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   const keysPressed = useRef<{ [key: string]: boolean }>({});
   const isMouseDown = useRef<boolean>(false);
   const lastShotTime = useRef<number>(0);
-  const semiAutoLatched = useRef<boolean>(false);
+  const godModeRef = useRef(godMode);
+  const isPausedRef = useRef(isPaused);
+  godModeRef.current = godMode;
+  isPausedRef.current = isPaused;
+  const handlersRef = useRef({
+    onUpdateWeapon,
+    onToggleMap,
+    onCallCasevac,
+    onOpenRoster,
+    onVitalsChanged,
+    onEnemyEliminated,
+    onFriendlyDown,
+    onPlayerPositionChanged,
+    onSquadStateChanged,
+  });
+  handlersRef.current = {
+    onUpdateWeapon,
+    onToggleMap,
+    onCallCasevac,
+    onOpenRoster,
+    onVitalsChanged,
+    onEnemyEliminated,
+    onFriendlyDown,
+    onPlayerPositionChanged,
+    onSquadStateChanged,
+  };
 
   // Sync weapon ref to avoid stale closure in simulation loop and event listeners
   const weaponRef = useRef<WeaponState>(weapon);
@@ -76,21 +103,36 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     weaponRef.current = weapon;
   }, [weapon]);
 
-  const activeSlotRef = useRef(activeWeaponSlot);
-  const hasPrimaryRef = useRef(hasPrimary);
-  const hasSidearmRef = useRef(hasSidearm);
+  // Sync attachment-driven light / ADS visuals into the 3D world
   useEffect(() => {
-    activeSlotRef.current = activeWeaponSlot;
-    hasPrimaryRef.current = hasPrimary;
-    hasSidearmRef.current = hasSidearm;
-  }, [activeWeaponSlot, hasPrimary, hasSidearm]);
+    const world = worldRef.current;
+    if (!world) return;
+    const fx = playerEquipment.getAttachmentEffects();
+    world.setTacticalLight(Boolean(weapon.tacticalLight) && fx.hasFlashlight, {
+      intensity: fx.lightIntensity,
+      rangeM: fx.lightRangeM,
+      coneAngleDeg: fx.lightConeAngleDeg,
+      color: fx.lightColor,
+    });
+    world.setAdsZoom(weapon.adsZoom ?? fx.adsZoom, Boolean(weapon.aimingDownSights));
+  }, [
+    weapon.tacticalLight,
+    weapon.aimingDownSights,
+    weapon.adsZoom,
+    weapon.attachments?.opticId,
+    weapon.attachments?.flashlightId,
+    weapon.attachments?.muzzleId,
+  ]);
 
-  const equippedWeapon =
-    getWeaponById(weapon.weaponId) ?? DEFAULT_PLAYER_WEAPON;
-  const magCapacity = equippedWeapon.magazineSize;
-  const reserveDisplay =
-    weapon.reserveRounds ??
-    weapon.reserveMags.reduce((sum, n) => sum + n, 0);
+  const syncWeaponFromEquipment = (lightEnabled?: boolean, ads?: boolean) => {
+    onUpdateWeapon((prev) =>
+      playerEquipment.applyToWeaponState(prev, {
+        lightEnabled: lightEnabled !== undefined ? lightEnabled : prev.tacticalLight,
+        aimingDownSights: ads !== undefined ? ads : prev.aimingDownSights,
+      }) as WeaponState
+    );
+    onLoadoutChanged?.(playerEquipment.snapshot());
+  };
 
   // Reload state
   const [reloadProgress, setReloadProgress] = useState<number>(0);
@@ -99,6 +141,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
   // Combat wave banner notification
   const [waveBanner, setWaveBanner] = useState<string | null>(null);
   const [combatBarkBanner, setCombatBarkBanner] = useState<{ speaker: string; text: string; isBluefor: boolean } | null>(null);
+
+  // Suppression / stress sensory feedback (blur intensity + heavy-fire flag)
+  const [suppressionBlur, setSuppressionBlur] = useState(0);
+  const [underHeavyFire, setUnderHeavyFire] = useState(false);
+  const lastSuppressionUiSync = useRef(0);
 
   const [isMobile, setIsMobile] = useState<boolean>(false);
 
@@ -132,14 +179,25 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
   // Hook into AI Director events
   useEffect(() => {
+    let waveTimer = 0;
+    let barkTimer = 0;
     aiDirector.onWaveAnnounce = (msg) => {
       setWaveBanner(msg);
-      setTimeout(() => setWaveBanner(null), 5000);
+      window.clearTimeout(waveTimer);
+      waveTimer = window.setTimeout(() => setWaveBanner(null), 5000);
     };
 
     aiDirector.onCombatBark = (speaker, text, isBluefor) => {
       setCombatBarkBanner({ speaker, text, isBluefor });
-      setTimeout(() => setCombatBarkBanner(null), 4000);
+      window.clearTimeout(barkTimer);
+      barkTimer = window.setTimeout(() => setCombatBarkBanner(null), 4000);
+    };
+
+    return () => {
+      window.clearTimeout(waveTimer);
+      window.clearTimeout(barkTimer);
+      aiDirector.onWaveAnnounce = undefined;
+      aiDirector.onCombatBark = undefined;
     };
   }, []);
 
@@ -153,7 +211,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       curWep.reserveMags.reduce((sum, n) => sum + n, 0);
     if (curWep.isReloading || curWep.currentMagRounds >= capacity || reserve <= 0) return;
 
-    onUpdateWeapon((prev) => ({ ...prev, isReloading: true }));
+    handlersRef.current.onUpdateWeapon((prev) => ({ ...prev, isReloading: true }));
     tacticalAudio.playMagCheck();
     setReloadProgress(0);
 
@@ -173,12 +231,9 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         reloadTimerRef.current = null;
         setReloadProgress(0);
 
-        onUpdateWeapon((prev) => {
-          const magSize = (getWeaponById(prev.weaponId) ?? DEFAULT_PLAYER_WEAPON).magazineSize;
-          const prevReserve =
-            prev.reserveRounds ??
-            prev.reserveMags.reduce((sum, n) => sum + n, 0);
-          const needed = magSize - prev.currentMagRounds;
+        handlersRef.current.onUpdateWeapon((prev) => {
+          const prevReserve = prev.reserveRounds ?? 120;
+          const needed = 30 - prev.currentMagRounds;
           const available = Math.min(needed, prevReserve);
           return {
             ...prev,
@@ -230,23 +285,79 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     if (!isFullAuto) semiAutoLatched.current = true;
 
     tacticalAudio.init();
-    tacticalAudio.playM4Fire();
+    audioManager.init();
+    const fx = playerEquipment.getAttachmentEffects();
+    const muzzle = {
+      x: world.playerGroup.position.x,
+      y: 0.9,
+      z: world.playerGroup.position.z,
+    };
+    audioManager.setListenerFromPlayer(
+      muzzle.x,
+      muzzle.z,
+      world.playerGroup.rotation.y
+    );
+    audioManager.playGunfire({
+      muzzle,
+      target: { x: world.aimPoint.x, y: 0.9, z: world.aimPoint.z },
+      weapon: def.id,
+      isPlayer: true,
+      intensity: fx.soundSignature ?? 1,
+      supersonic: !fx.isSuppressed && def.muzzleVelocity > 343,
+      listener: muzzle,
+    });
+        
 
-    onUpdateWeapon((prev) => ({
+    // Decrement magazine count immediately!
+    handlersRef.current.onUpdateWeapon((prev) => ({
       ...prev,
       currentMagRounds: Math.max(0, prev.currentMagRounds - 1),
     }));
 
+    world.shootPlayerBullet(world.aimPoint, {
+      speed: getProjectileSpeed(def),
+      muzzleVelocity: def.muzzleVelocity,
+      velocity: Math.max(80, def.muzzleVelocity - (fx.velocityLossMps ?? 0)),
+    });
+
+    // Shoot player bullet towards mouse aim
     world.shootPlayerBullet(world.aimPoint);
+
   };
 
   useEffect(() => {
     if (!containerRef.current) return;
 
     tacticalAudio.init();
+    audioManager.init();
     const world = new ThreeTacticalWorld(containerRef.current);
     worldRef.current = world;
     world.setGodMode(godMode);
+    let mapLoadActive = true;
+    setMapStatus('loading');
+    world.onMapReady = (layout) => {
+      if (!mapLoadActive) return;
+      aiDirector.relocateToCity(layout);
+      setMapStatus('ready');
+    };
+    world.onMapFailed = () => {
+      if (!mapLoadActive) return;
+      setMapStatus('error');
+    };
+
+
+    // Seed weapon attachment fields from default player kit
+    const seeded = playerEquipment.applyToWeaponState(weaponRef.current) as WeaponState;
+    onUpdateWeapon(() => seeded);
+    onLoadoutChanged?.(playerEquipment.snapshot());
+    const fx0 = playerEquipment.getAttachmentEffects();
+    world.setTacticalLight(Boolean(seeded.tacticalLight) && fx0.hasFlashlight, {
+      intensity: fx0.lightIntensity,
+      rangeM: fx0.lightRangeM,
+      coneAngleDeg: fx0.lightConeAngleDeg,
+      color: fx0.lightColor,
+    });
+
 
     const initialWidth = containerRef.current.clientWidth || window.innerWidth;
     const initialHeight = containerRef.current.clientHeight || (window.innerHeight - 48);
@@ -266,12 +377,6 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       keysPressed.current[e.code] = true;
       keysPressed.current[key] = true;
 
-      if (e.key === 'Escape') onOpenPauseMenu();
-      if (e.key === 'Tab') {
-        e.preventDefault();
-        onOpenScoreboard();
-      }
-      if (key === 'g') onToggleGodMode();
       if (e.code === 'KeyR' || key === 'r') triggerReload();
       if (e.code === 'KeyM' || key === 'm') onToggleMap();
       if (e.code === 'KeyI' || key === 'i') onOpenInventory();
@@ -279,6 +384,17 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       if (e.code === 'Digit2' || key === '2') onSwitchWeaponSlot('sidearm');
       if (e.code === 'Digit9') onCallCasevac();
       if (e.code === 'KeyP' || key === 'p') onOpenRoster();
+      if (e.code === 'KeyI' || key === 'i') onOpenInventoryRef.current?.();
+      if (e.code === 'KeyV' || key === 'v') {
+        onUpdateWeapon((prev) => ({ ...prev, aimingDownSights: !prev.aimingDownSights }));
+      }
+      if ((e.code === 'KeyH' || key === 'h') && !e.repeat) worldRef.current?.triggerPlayerSignal();
+      if (e.code === 'KeyL' || key === 'l') {
+        const fx = playerEquipment.getAttachmentEffects();
+        if (!fx.hasFlashlight) return;
+        onUpdateWeapon((prev) => ({ ...prev, tacticalLight: !prev.tacticalLight }));
+      }
+        
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -311,12 +427,19 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         updateAimFromEvent(e.clientX, e.clientY);
         fireEquippedRound();
       }
+      if (e.button === 2) {
+        onUpdateWeapon((prev) => ({ ...prev, aimingDownSights: !prev.aimingDownSights }));
+      }
+        
     };
 
     const handleMouseUp = (e: MouseEvent) => {
       if (e.button === 0) {
         isMouseDown.current = false;
         semiAutoLatched.current = false;
+      }
+      if (e.button === 2) {
+        syncWeaponFromEquipment(undefined, false);
       }
     };
 
@@ -336,32 +459,28 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       const dt = Math.min(0.1, (currentTime - lastTime) / 1000);
       lastTime = currentTime;
 
-      if (!isPaused) {
+      if (!isPausedRef.current) {
         // Continuous M4 Auto Fire if mouse held down
         if (isMouseDown.current) {
           fireEquippedRound();
         }
 
         // 1. Update Anatomy if not in god mode
-        if (!godMode) {
+        if (!godModeRef.current) {
           anatomySim.update(dt);
         }
 
         if (currentTime - lastVitalsSync > 120) {
           lastVitalsSync = currentTime;
-          onVitalsChanged();
+          handlersRef.current.onVitalsChanged();
 
-          if (onPlayerPositionChanged) {
-            onPlayerPositionChanged({
-              x: world.playerGroup.position.x,
-              z: world.playerGroup.position.z,
-              rotationY: world.playerGroup.rotation.y,
-            });
-          }
+          handlersRef.current.onPlayerPositionChanged?.({
+            x: world.playerGroup.position.x,
+            z: world.playerGroup.position.z,
+            rotationY: world.playerGroup.rotation.y,
+          });
 
-          if (onSquadStateChanged) {
-            onSquadStateChanged(aiDirector.friendlies, aiDirector.enemies);
-          }
+          handlersRef.current.onSquadStateChanged?.(aiDirector.friendlies, aiDirector.enemies);
         }
 
         // 2. Update AI GOAP Director with Friendlies and Enemies
@@ -378,15 +497,19 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         world.syncFriendlies(aiDirector.friendlies);
         world.syncEnemies(aiDirector.enemies);
 
+        // Sync AI equipment registries with live combatant rosters
+        equipmentManager.syncCombatants(aiDirector.friendlies, aiDirector.enemies);
+
         // 3. Update Player Movement
         updatePlayerMovement(dt, world);
 
         // 4. Render Frame with Precise Entity Collision Callbacks
         world.render(
           dt,
-          (enemyShooterId) => {
-            // Player hit by hostile bullet
+          (enemyShooterId, damageScale = 1) => {
+            if (damageScale <= 0.05) return;
             if (!godMode) {
+        
               const zones = [
                 'head_carotid',
                 'torso_lungs',
@@ -395,11 +518,24 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
                 'junctional_groin',
                 'limb_arm_left',
                 'limb_leg_right',
+                'torso_heart',
+                'head_brain',
+                'head_facial',
               ] as const;
               const hitZone = zones[Math.floor(Math.random() * zones.length)];
-              anatomySim.inflictTrauma(hitZone);
-              tacticalAudio.playBulletCrack();
+              const pen = getWeaponById('akm')?.damage?.armorPenetration ?? 0.62;
+              const armor = equipmentManager.resolveArmorHit('player', hitZone, pen);
+              if (!armor?.stopped) {
+                anatomySim.inflictTrauma(hitZone);
+              }
+              suppressionSystem.registerImpact('hit', damageScale);
+              audioManager.playSonicCrack(
+                { x: playerPos.x, y: 1.0, z: playerPos.z },
+                'ak47',
+                { missDistance: 0.4, intensity: 1.2 }
+              );
               onVitalsChanged();
+        
 
               // If player flatlined, credit enemy shooter
               if (anatomySim.vitals.shockStage === 'cardiac_arrest') {
@@ -407,7 +543,11 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
                 if (enemy) enemy.kills += 1;
               }
             } else {
-              tacticalAudio.playBulletCrack();
+              audioManager.playSonicCrack(
+                { x: playerPos.x, y: 1.0, z: playerPos.z },
+                'ak47',
+                { missDistance: 0.5, intensity: 1.0 }
+              );
             }
           },
           (friendlyId, enemyShooterId) => {
@@ -415,7 +555,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             const killed = aiDirector.hitFriendly(friendlyId, 35, enemyShooterId);
             tacticalAudio.playBulletCrack();
             if (killed) {
-              onFriendlyDown(friendlyId, enemyShooterId);
+              handlersRef.current.onFriendlyDown(friendlyId, enemyShooterId);
             }
           },
           (enemyId, shooterId) => {
@@ -423,15 +563,35 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             const killed = aiDirector.hitEnemy(enemyId, 45, shooterId);
             tacticalAudio.playEnemyAKFire();
             if (killed) {
-              onEnemyEliminated(enemyId, shooterId);
+              handlersRef.current.onEnemyEliminated(enemyId, shooterId);
+            }
+          },
+          (impactPos, isBluefor) => {
+            // Nearby cover / terrain impacts from hostile fire rattle the player
+            if (!isBluefor) {
+              suppressionSystem.registerWorldImpact(impactPos, {
+                x: world.playerGroup.position.x,
+                z: world.playerGroup.position.z,
+              });
             }
           }
         );
+
+        const stress = suppressionSystem.update(dt);
+        tacticalAudio.setSuppressionMuffle(stress.muffle);
+        world.applySuppressionSway(stress.swayOffsetX, stress.swayOffsetZ);
+        if (suppressionVeilRef.current) {
+          suppressionVeilRef.current.style.opacity = stress.blurPx > 0.4 ? '1' : '0';
+          suppressionVeilRef.current.style.backdropFilter = `blur(${stress.blurPx.toFixed(1)}px)`;
+        }
+
+=======
 
         // Render Live Mini-Radar
         renderMiniRadar(world.playerGroup.position, world.playerGroup.rotation.y);
       } else {
         world.render(0, () => {}, () => {}, () => {});
+        tacticalAudio.setSuppressionMuffle(0);
       }
 
       animFrame = requestAnimationFrame(loop);
@@ -449,9 +609,10 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       canvas.removeEventListener('mousedown', handleMouseDown);
       window.removeEventListener('mouseup', handleMouseUp);
       canvas.removeEventListener('contextmenu', handleContextMenu);
+      tacticalAudio.cleanup();
       world.destroy();
     };
-  }, [godMode, isPaused]);
+  }, []);
 
   // Mini-Radar Render function
   const renderMiniRadar = (playerPos: THREE.Vector3, playerRotY: number) => {
@@ -483,9 +644,26 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
     ctx.lineTo(w - 4, h / 2);
     ctx.stroke();
 
+    for (const placement of tacticalLayout?.placements ?? []) {
+      if (!placement?.position || !placement.size) continue;
+      const swapped = Math.abs(Math.sin(placement.rotationY || 0)) > 0.5;
+      const rw = ((swapped ? placement.size.z : placement.size.x) / 96) * w;
+      const rh = ((swapped ? placement.size.x : placement.size.z) / 96) * h;
+      ctx.fillStyle = placement.kind === 'trench'
+        ? '#3f6212'
+        : placement.kind === 'ruined_brick'
+        ? '#9a3412'
+        : placement.kind === 'shipping_container'
+        ? '#c2410c'
+        : placement.kind === 'crate'
+        ? '#d97706'
+        : '#64748b';
+      ctx.fillRect(toRadarX(placement.position.x) - rw / 2, toRadarY(placement.position.z) - rh / 2, rw, rh);
+    }
+
     // Draw Enemies (RED)
     aiDirector.enemies.forEach((e) => {
-      if (e.health <= 0) return;
+      if (!e?.position || e.health <= 0) return;
       ctx.fillStyle = '#ef4444';
       ctx.beginPath();
       ctx.arc(toRadarX(e.position.x), toRadarY(e.position.z), 2.5, 0, Math.PI * 2);
@@ -494,7 +672,7 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
 
     // Draw Friendlies (BLUE)
     aiDirector.friendlies.forEach((f) => {
-      if (f.status === 'KIA') return;
+      if (!f?.position || f.status === 'KIA') return;
       ctx.fillStyle = '#38bdf8';
       ctx.beginPath();
       ctx.arc(toRadarX(f.position.x), toRadarY(f.position.z), 2.5, 0, Math.PI * 2);
@@ -533,12 +711,18 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       moveZ += leftMoveDelta.current.y;
     }
 
-    let speed = 9.5;
+    const sprinting =
+      !anatomySim.vitals.paralyzed &&
+      !anatomySim.vitals.limping &&
+      (keysPressed.current['ShiftLeft'] || keysPressed.current['ShiftRight']);
+    let speed = (sprinting ? 10.6 : 6.2) * playerEquipment.getMoveSpeedMultiplier();
+        main
     if (!godMode) {
       if (anatomySim.vitals.paralyzed) {
         speed = 2.4; // Spine paralysis crawl
       } else if (anatomySim.vitals.limping) {
-        speed = 5.4; // Limping from leg wound / TQ
+        speed = 3.6 * playerEquipment.getMoveSpeedMultiplier();
+        
       }
     }
 
@@ -630,14 +814,39 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
         className="w-full h-full absolute inset-0 cursor-crosshair"
       />
 
+      {/* Suppression: backdrop blur + vignette (blurs the canvas underneath) */}
+      {suppressionBlur > 0.05 && (
+        <div
+          className="absolute inset-0 pointer-events-none z-[5] transition-[backdrop-filter,opacity] duration-75"
+          style={{
+            backdropFilter: `blur(${suppressionBlur.toFixed(2)}px)`,
+            WebkitBackdropFilter: `blur(${suppressionBlur.toFixed(2)}px)`,
+            background: underHeavyFire
+              ? 'radial-gradient(circle at center, rgba(15,23,42,0.05) 28%, rgba(15, 23, 42, 0.45) 72%, rgba(2, 6, 23, 0.82) 100%)'
+              : `radial-gradient(circle at center, transparent 42%, rgba(15, 23, 42, ${Math.min(0.5, 0.12 + suppressionBlur * 0.06)}) 100%)`,
+          }}
+          aria-hidden
+        />
+      )}
+
       {/* Top Left Quick Indicator Bar */}
       <div className="absolute top-4 left-4 z-20 flex items-center gap-3 bg-slate-950/85 backdrop-blur-md px-3.5 py-1.5 rounded border border-slate-800 text-xs font-mono text-slate-300">
         <span>WASD: Move</span>
         <span>·</span>
-        <span className="text-amber-300 font-bold">L-Click: Fire</span>
-        <span className="hidden sm:inline">·</span>
-        <span className="hidden sm:inline text-sky-300">[1]/[2] Swap · [I] Gear</span>
+        <span>SPACE: Jump</span>
         <span>·</span>
+        <span>SHIFT: Sprint</span>
+        <span>·</span>
+        <span>H: Hand signal</span>
+        <span>·</span>
+        <span className="text-amber-300 font-bold">L-Click: Auto M4 Fire</span>
+        origin/main
+        <span>·</span>
+        <span className="text-sky-300">RMB/V: ADS</span>
+        <span>·</span>
+        <span className="text-yellow-200">L: Light</span>
+        <span>·</span>
+        <span className="text-violet-300">O: Optic</span>
         <button
           onClick={onToggleGodMode}
           className={`px-2 py-0.5 rounded text-[11px] font-bold cursor-pointer transition-colors ${
@@ -790,6 +999,22 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
             {weapon.currentMagRounds === 0 ? 'EMPTY - PRESS [R] TO RELOAD' : 'RELOAD [R]'}
           </button>
         )}
+
+        {/* Attachment / gear strip from equipment system */}
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-[9px] text-slate-500 border-t border-slate-800 pt-1.5 mt-0.5 uppercase tracking-wide">
+          <span className="text-slate-300">
+            {(weapon.reticle ?? 'iron').toString().replace('_', ' ')}
+            {weapon.aimingDownSights ? ` ×${(weapon.adsZoom ?? 1).toFixed(1)}` : ''}
+          </span>
+          <span>·</span>
+          <span className={weapon.tacticalLight ? 'text-yellow-300' : ''}>
+            LIGHT {weapon.tacticalLight ? 'ON' : 'OFF'}
+          </span>
+          <span>·</span>
+          <span className={weapon.isSuppressed ? 'text-emerald-400' : ''}>
+            {weapon.isSuppressed ? 'SUPPRESSED' : 'UNSUPPRESSED'}
+          </span>
+        </div>
       </div>
 
       {/* Mobile Virtual Joystick */}
