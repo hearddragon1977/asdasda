@@ -820,12 +820,49 @@ export const DEFAULT_OPFOR_GEAR_IDS = Object.freeze({
 });
 
 /**
- * @param {string} id
- * @returns {GearDefinition | undefined}
+ * Inventory-facing view of a catalog entry.
+ * Adds the slot / protection / ammo fields the loadout UI reads.
+ * @param {GearDefinition | null | undefined} item
+ * @returns {GearDefinition & { slot: string, protection: number, ammoBonusMags?: number }}
+ */
+function inventoryView(item) {
+  const source = item || {};
+  const slot = source.slot || source.category || 'vest';
+  const protection =
+    source.protection ??
+    source.helmet?.craniumProtection ??
+    source.vest?.protectionFactor ??
+    0;
+  const ammoBonusMags =
+    source.ammoBonusMags ??
+    (source.backpack ? Math.max(0, Math.round((source.backpack.capacitySlots ?? 0) / 4)) : undefined);
+  return { ...source, slot, protection, ammoBonusMags };
+}
+
+/**
+ * @param {string | null | undefined} id
+ * @returns {(GearDefinition & { slot: string, protection: number, ammoBonusMags?: number }) | undefined}
  */
 export function getGearById(id) {
   if (!id) return undefined;
-  return GEAR_BY_ID[id];
+  const item = GEAR_BY_ID[id];
+  if (!item) return undefined;
+  return inventoryView(item);
+}
+
+/** Inventory modal aliases for the Afghanistan-era worn kit. */
+export const DEFAULT_HELMET = inventoryView(ACH_MICH);
+export const DEFAULT_VEST = inventoryView(IOTV_GEN2);
+export const DEFAULT_BACKPACK = inventoryView(ASSAULT_PACK_3DAY);
+
+/**
+ * @param {string} slot
+ * @returns {Array<GearDefinition & { slot: string, protection: number, ammoBonusMags?: number }>}
+ */
+export function getGearBySlot(slot) {
+  return GEAR.filter((item) => item.kind === 'equipment' && (item.slot || item.category) === slot).map((item) =>
+    inventoryView(item)
+  );
 }
 
 /**
