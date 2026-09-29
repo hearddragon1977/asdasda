@@ -27,6 +27,7 @@ import { createDefaultInventory, getActiveWeaponState, replenishInventoryAmmo, s
 import { DEFAULT_PLAYER_WEAPON, getWeaponById } from './data/weapons.js';
 
 import { equipmentManager, playerEquipment } from './systems/equipment.js';
+import { suppressionSystem } from './systems/suppression.js';
 
 import { AuthProvider, useAuth } from './firebase/AuthContext';
 import {

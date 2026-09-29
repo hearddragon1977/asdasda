@@ -9,8 +9,6 @@ import { EnemyCombatant, FriendlyCombatant, WeaponState } from '../types/game';
 import { DEFAULT_PLAYER_WEAPON, getProjectileSpeed, getShotIntervalMs, getWeaponById } from '../data/weapons.js';
 import { audioManager } from '../systems/audio.js';
 import { equipmentManager, playerEquipment } from '../systems/equipment.js';
-import { suppressionSystem } from '../systems/suppression.js';
-        
 
 interface TacticalViewportProps {
   weapon: WeaponState;
@@ -678,7 +676,6 @@ export const TacticalViewport: React.FC<TacticalViewportProps> = ({
       !anatomySim.vitals.limping &&
       (keysPressed.current['ShiftLeft'] || keysPressed.current['ShiftRight']);
     let speed = (sprinting ? 10.6 : 6.2) * playerEquipment.getMoveSpeedMultiplier();
-        main
     if (!godMode) {
       if (anatomySim.vitals.paralyzed) {
         speed = 2.4; // Spine paralysis crawl
