@@ -15,13 +15,7 @@ class TacticalAudioEngine {
   private breathingTimer: number | null = null;
   private isInitialized = false;
   private tinnitusStopTimer: number | null = null;
-
-  public setSuppressionMuffle(amount: number): void {
-    const ctx = this.ensureContext();
-    if (!ctx || !this.masterGain) return;
-    const clamped = Math.max(0, Math.min(1, amount));
-    this.masterGain.gain.setTargetAtTime(0.85 * (1 - clamped * 0.45), ctx.currentTime, 0.05);
-  }
+  private suppressionMuffle = 0;
 
   public init(): void {
     if (this.isInitialized && this.ctx) return;

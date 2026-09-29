@@ -6,7 +6,6 @@ interface PauseMenuModalProps {
   onOpenScoreboard: () => void;
   onOpenMap: () => void;
   onOpenRoster: () => void;
-  onOpenInventory: () => void;
   onCallCasevac: () => void;
   onOpenInventory?: () => void;
   onRestartMission: () => void;
@@ -20,7 +19,6 @@ export const PauseMenuModal: React.FC<PauseMenuModalProps> = ({
   onOpenScoreboard,
   onOpenMap,
   onOpenRoster,
-  onOpenInventory,
   onCallCasevac,
   onOpenInventory,
   onRestartMission,
@@ -32,6 +30,7 @@ export const PauseMenuModal: React.FC<PauseMenuModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4 select-none">
       <div className="relative w-full max-w-md bg-slate-900 border border-slate-700 p-6 rounded-sm font-mono text-slate-100 shadow-2xl flex flex-col gap-4">
+        {/* Header */}
         <div className="border-b border-slate-800 pb-3 text-center">
           <span className="text-xs uppercase font-bold tracking-widest text-sky-400 block">
             SIMULATION SUSPENDED
@@ -39,20 +38,13 @@ export const PauseMenuModal: React.FC<PauseMenuModalProps> = ({
           <h2 className="text-xl font-bold tracking-wide mt-1">TACTICAL PAUSE MENU</h2>
         </div>
 
+        {/* Buttons List */}
         <div className="flex flex-col gap-2 pt-2">
           <button
             onClick={onResume}
             className="w-full py-2.5 bg-sky-600 hover:bg-sky-500 text-slate-950 font-bold text-xs uppercase tracking-wider rounded transition-colors cursor-pointer"
           >
             Resume Engagement [TAB]
-          </button>
-
-          <button
-            onClick={onOpenInventory}
-            className="w-full py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold rounded transition-colors cursor-pointer flex items-center justify-between px-4"
-          >
-            <span>Inventory & Equipment</span>
-            <span className="text-[10px] text-slate-400">[I]</span>
           </button>
 
           <button
